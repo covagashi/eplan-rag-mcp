@@ -81,6 +81,29 @@ async function getFile(db: D1Database, path: string) {
   return row;
 }
 
+// A handful of "...PropertyList" API classes (hundreds of constant fields,
+// all documented on one page -- there's no per-member sub-page to bundle
+// separately) run 100KB-1.3MB. eplan2027_get used to hand that back in one
+// shot, which is a lot of a caller's context budget for what's usually one
+// property lookup. Page it instead: same total content, just bounded per call.
+const GET_PAGE_CHARS = 20_000;
+
+function pageContent(content: string, offset: number): { text: string; note: string | null; nextOffset: number | null } {
+  const total = content.length;
+  if (total <= GET_PAGE_CHARS && offset === 0) {
+    return { text: content, note: null, nextOffset: null };
+  }
+  const start = Math.min(Math.max(offset, 0), total);
+  const end = Math.min(start + GET_PAGE_CHARS, total);
+  const text = content.slice(start, end);
+  const nextOffset = end < total ? end : null;
+  const note = nextOffset === null
+    ? `[end of file -- showing ${start}-${end} of ${total} chars]`
+    : `[showing ${start}-${end} of ${total} chars -- call again with offset=${nextOffset} for more, ` +
+      `or use eplan2027_search for a targeted lookup instead of reading the whole file]`;
+  return { text, note, nextOffset };
+}
+
 // --- MCP Server Setup ---
 
 function createMcpServer(env: Env): McpServer {
@@ -109,15 +132,21 @@ function createMcpServer(env: Env): McpServer {
 
   server.tool(
     "eplan2027_get",
-    "Fetch the full content of one file from the EPLAN 2027 API wiki by its path " +
-      "(as returned by eplan2027_search).",
-    { path: z.string().describe("File path as returned by eplan2027_search, e.g. 'API Reference/.../Action.md'") },
-    async ({ path }) => {
+    "Fetch the content of one file from the EPLAN 2027 API wiki by its path " +
+      "(as returned by eplan2027_search). A few large '...PropertyList' classes " +
+      "run past 100KB; those come back paginated (~20K chars/call) with an " +
+      "offset to continue -- prefer eplan2027_search first if you only need one property.",
+    {
+      path: z.string().describe("File path as returned by eplan2027_search, e.g. 'API Reference/.../Action.md'"),
+      offset: z.number().min(0).default(0).describe("Char offset to resume from, for paginated files (see the trailing note in a prior response)"),
+    },
+    async ({ path, offset }) => {
       const row = await getFile(env.DB, path);
       if (!row) {
         return { content: [{ type: "text" as const, text: `Not found: ${path}` }], isError: true };
       }
-      return { content: [{ type: "text" as const, text: row.content as string }] };
+      const { text, note } = pageContent(row.content as string, offset ?? 0);
+      return { content: [{ type: "text" as const, text: note ? `${text}\n\n${note}` : text }] };
     }
   );
 
@@ -215,10 +244,16 @@ async function handleMcpRequest(request: Request, env: Env): Promise<Response> {
           },
           {
             name: "eplan2027_get",
-            description: "Fetch the full content of one file from the EPLAN 2027 API wiki by its path.",
+            description:
+              "Fetch the content of one file from the EPLAN 2027 API wiki by its path. " +
+              "Large files (a few '...PropertyList' classes past 100KB) come back paginated " +
+              "with an offset to continue.",
             inputSchema: {
               type: "object",
-              properties: { path: { type: "string" } },
+              properties: {
+                path: { type: "string" },
+                offset: { type: "number", minimum: 0, default: 0, description: "Char offset to resume from" },
+              },
               required: ["path"],
             },
           },
@@ -253,7 +288,8 @@ async function handleMcpRequest(request: Request, env: Env): Promise<Response> {
         if (!row) {
           return json({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: `Not found: ${path}` }], isError: true } });
         }
-        return json({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: row.content as string }] } });
+        const { text, note } = pageContent(row.content as string, (args.offset as number) ?? 0);
+        return json({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: note ? `${text}\n\n${note}` : text }] } });
       }
       if (toolName === "eplan2027_stats") {
         const info = await getStats(env.DB);
@@ -307,7 +343,10 @@ export default {
         if (!filePath) return json({ error: "Missing 'path' query param" }, 400, corsHeaders);
         const row = await getFile(env.DB, filePath);
         if (!row) return json({ error: "Not found" }, 404, corsHeaders);
-        return json(row, 200, corsHeaders);
+        if (url.searchParams.get("full") === "1") return json(row, 200, corsHeaders); // opt out of paging, e.g. for bulk export
+        const offset = Number(url.searchParams.get("offset") ?? "0") || 0;
+        const { text, note, nextOffset } = pageContent(row.content as string, offset);
+        return json({ ...row, content: text, truncated: note !== null, note, nextOffset }, 200, corsHeaders);
       }
       // One-time bulk-load endpoint (ingest.py). Bound parameters, not SQL
       // text -- avoids the SQLITE_TOOBIG limit `wrangler d1 execute --file`
