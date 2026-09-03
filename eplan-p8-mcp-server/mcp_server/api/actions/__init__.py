@@ -343,6 +343,17 @@ from .schematic import (
     live_remove_placement,
 )
 
+# Convention profiles - learn how a go-by project builds schematics, so
+# generated work matches the house (and the client) standard. Profiles are
+# stored OUTSIDE the repo: a client's conventions are customer data.
+from .profiles import (
+    profile_learn,
+    profile_list,
+    profile_get,
+    profile_suggest,
+    profile_forget,
+)
+
 # GED interaction (start an interactive placement in the graphical editor)
 from .interaction import (
     start_ged_interaction,
@@ -476,6 +487,8 @@ __all__ = [
     'live_set_connection_designations',
     'live_symbol_catalog', 'live_create_page', 'live_place_symbol',
     'live_connect_pins', 'live_read_page', 'live_remove_placement',
+    'profile_learn', 'profile_list', 'profile_get', 'profile_suggest',
+    'profile_forget',
     # GED interaction
     'start_ged_interaction', 'insert_device', 'insert_symbol_reference',
     'select_device',

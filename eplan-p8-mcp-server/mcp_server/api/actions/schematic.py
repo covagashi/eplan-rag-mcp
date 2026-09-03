@@ -285,7 +285,8 @@ _HELPERS_SCHEMATIC = r'''
         return d;
     }
 
-    static Dictionary<string, object> ReadPage(object page, int limit, bool withPins)
+    static Dictionary<string, object> ReadPage(object page, int limit, bool withPins,
+                                               string[] onlyTypes)
     {
         Dictionary<string, object> d = new Dictionary<string, object>();
         d["page"] = PropText(page, "Name");
@@ -296,18 +297,36 @@ _HELPERS_SCHEMATIC = r'''
         object size = TryRead(page, "Size", null);
         if (size != null) d["size"] = PtDict(size);
 
+        // onlyTypes matters more than it looks. A real schematic page is mostly
+        // GRAPHICS: measured on a production go-by, one Circuit page held 1887
+        // placements of which the first 40 were all PolyLine. An unfiltered read
+        // therefore truncates before it reaches a single device, so a caller
+        // looking for devices sees none and concludes the page is empty.
         List<object> items = new List<object>();
-        int total = 0;
+        int total = 0, matched = 0;
         foreach (object pl in PagePlacements(page))
         {
             if (pl == null) continue;
             total++;
+            if (onlyTypes != null && onlyTypes.Length > 0)
+            {
+                bool keep = false;
+                string tn = pl.GetType().Name;
+                foreach (string want in onlyTypes)
+                    if (string.Equals(tn, want, StringComparison.OrdinalIgnoreCase)) { keep = true; break; }
+                if (!keep) continue;
+            }
+            matched++;
             if (items.Count < limit) items.Add(DumpPlacement(pl, withPins));
         }
+        // placementCount stays the TRUE total on the page, so a filtered read is
+        // never mistaken for an empty page; "matched" is what the filter kept.
         d["placementCount"] = total;
+        d["matched"] = matched;
         d["returned"] = items.Count;
-        d["truncated"] = total > items.Count;
+        d["truncated"] = matched > items.Count;
         d["placements"] = items;
+        if (onlyTypes != null && onlyTypes.Length > 0) d["filteredTo"] = onlyTypes;
         return d;
     }
 
@@ -777,7 +796,7 @@ def live_create_page(plant: str = None, location: str = None, counter: int = 1,
             if (grid != null) results["gridSize"] = Convert.ToDouble(grid);
             object size = TryRead(page, "Size", null);
             if (size != null) results["size"] = PtDict(size);
-            results["page_after"] = ReadPage(page, 50, false);
+            results["page_after"] = ReadPage(page, 50, false, null);
 '''
     body = body.replace("PAGETYPE", '"%s"' % cs_escape(page_type))
 
@@ -930,7 +949,7 @@ def live_place_symbol(page: str, library: str, symbol: str, x: float, y: float,
             results["placed"] = DumpPlacement(fn, true);
             results["nameNote"] = "A newly placed function has no device tag yet, so " +
                 "its name is '+' until one is assigned. That is expected.";
-            results["page_after"] = ReadPage(page, 200, true);
+            results["page_after"] = ReadPage(page, 200, true, null);
 '''
     body = (body
             .replace("PAGENAME", '"%s"' % page_cs)
@@ -1086,7 +1105,7 @@ def live_connect_pins(page: str, from_handle: str, from_pin: int,
             results["lineDrawn"] = true;
             results["handle"] = Handle(dcl);
             results["line"] = DumpPlacement(dcl, false);
-            results["page_after"] = ReadPage(page, 200, true);
+            results["page_after"] = ReadPage(page, 200, true, null);
 '''
     body = (body
             .replace("PAGENAME", '"%s"' % page_cs)
@@ -1134,7 +1153,7 @@ def _pin_point(side, index):
 # ---------------------------------------------------------------------------
 
 def live_read_page(page: str, include_pins: bool = True, limit: int = 200,
-                   timeout_seconds: float = 90.0) -> dict:
+                   types: list = None, timeout_seconds: float = 90.0) -> dict:
     """
     Read one page's full state: every placement, its geometry and its pins.
 
@@ -1152,6 +1171,14 @@ def live_read_page(page: str, include_pins: bool = True, limit: int = 200,
         include_pins: Include each placement's connection points (default True).
         limit: Max placements returned; the true count is always reported so a
             truncated read is never mistaken for a complete one.
+        types: Only return placements of these CLR types, e.g. ["Function"] for
+            devices or ["DynamicConnectionLine"] for wires. Omit for everything.
+
+            USE THIS when you are looking for devices. A real schematic page is
+            mostly graphics: measured on a production go-by, one Circuit page
+            held 1887 placements whose first 40 were all PolyLine. Unfiltered,
+            `limit` is exhausted on graphics before a single device is reached,
+            and the page looks empty.
         timeout_seconds: Default 90s.
 
     Returns:
@@ -1173,17 +1200,27 @@ def live_read_page(page: str, include_pins: bool = True, limit: int = 200,
     try:
         page_cs = cs_escape(cs_text(page, "page"))
         limit = cs_int(limit, "limit", minimum=1, maximum=5000)
+        if types is not None:
+            if isinstance(types, str):
+                types = [types]
+            types = [cs_escape(cs_text(t, "types entry")) for t in types]
+            if not types:
+                types = None
     except SchematicValueError as exc:
         return _err(exc)
 
+    only = ("null" if not types
+            else "new string[] { %s }" % ", ".join('"%s"' % t for t in types))
+
     body = '''            object page = FindPage(project, PAGENAME);
-            Dictionary<string, object> state = ReadPage(page, LIMIT, WITHPINS);
+            Dictionary<string, object> state = ReadPage(page, LIMIT, WITHPINS, ONLYTYPES);
             foreach (KeyValuePair<string, object> kv in state) results[kv.Key] = kv.Value;
             results["handle"] = Handle(page);
 '''
     body = (body
             .replace("PAGENAME", '"%s"' % page_cs)
             .replace("LIMIT", str(limit))
+            .replace("ONLYTYPES", only)
             .replace("WITHPINS", cs_bool(include_pins)))
 
     out = _shape(_execute_script(
@@ -1253,7 +1290,7 @@ def live_remove_placement(page: str, handle: str = None,
             object page = FindPage(project, PAGENAME);
             results["page"] = PropText(page, "Name");
             // Record what is about to be destroyed BEFORE destroying it.
-            results["page_before"] = ReadPage(page, 500, false);
+            results["page_before"] = ReadPage(page, 500, false, null);
             MethodInfo rm = RequireMethod(page.GetType(), "Remove", new string[] { }, false);
             Call(rm, page, null);
             results["pageRemoved"] = true;
@@ -1274,7 +1311,7 @@ def live_remove_placement(page: str, handle: str = None,
             results["removedType"] = target.GetType().Name;
             MethodInfo rm = RequireMethod(target.GetType(), "Remove", new string[] { }, false);
             Call(rm, target, null);
-            results["page_after"] = ReadPage(page, 200, false);
+            results["page_after"] = ReadPage(page, 200, false, null);
 '''
         body = body.replace("HANDLE", '"%s"' % handle_cs)
     body = body.replace("PAGENAME", '"%s"' % page_cs)
