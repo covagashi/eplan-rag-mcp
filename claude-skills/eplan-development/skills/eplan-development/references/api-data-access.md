@@ -167,6 +167,79 @@ foreach (var pos in part.UserDefinedPropertyPositions)
 }
 ```
 
+## Symbol library enumeration (`SymbolLibrary` / `Symbol`)
+
+Same reflection technique as the parts database, reached through
+`Eplan.EplApi.DataModel.MasterData.SymbolLibrary`/`Symbol`/`SymbolVariant` -
+no separate API license, works from a plain script.
+
+```csharp
+Type libType = FindType("Eplan.EplApi.DataModel.MasterData.SymbolLibrary");
+Type symType = FindType("Eplan.EplApi.DataModel.MasterData.Symbol");
+ConstructorInfo libCtor = libType.GetConstructor(new Type[] { project.GetType(), typeof(string) });
+object lib = libCtor.Invoke(new object[] { project, "IEC_symbol" });
+
+// By exact name - the reliable route, see the gotcha below for "by index".
+ConstructorInfo symByName = symType.GetConstructor(new Type[] { libType, typeof(string) });
+object sym = symByName.Invoke(new object[] { lib, "Q_2L" });
+```
+
+### `Symbol(SymbolLibrary, int)` ids are SPARSE - `continue`, never `break`, on a construction miss
+
+Walking a library by numeric index (`new Symbol(lib, i)` for `i` in `0..N`) is
+the only way to enumerate names without already knowing them, but **the ids
+are not contiguous**. Measured live (2026-09-08): on one project's `SPECIAL`
+library the constructor throws for every `i` from 73 onward until 402
+(`DCP2JICM`), then resolves again up to 634. A loop that does
+`catch { break; }` (or `if (sym == null) break;`) on the first failure stops
+enumerating at 73 and **silently drops every id above it** - it does not
+raise, does not report a partial result, nothing distinguishes it from a
+library that genuinely only has 73 symbols. `try/catch { continue; }` (and
+`continue`, not `break`, on a null result) fixes it - bound the loop
+(`i < 5000` is generous and cheap; a miss is just a fast reflection
+exception) and let it run to the end:
+
+```csharp
+for (int i = 0; i < 5000; i++)
+{
+    object sym = null;
+    try { sym = symByIdx.Invoke(new object[] { lib, i }); }
+    catch { continue; }             // NOT break - see above
+    if (sym == null) continue;      // NOT break
+    if (PropText(sym, "IsValid") != "True") continue;
+    // ... use sym ...
+}
+```
+
+A caller-facing enumeration tool built on this walk should report a `matched`
+count separate from what it returns, and should NOT report `truncated: false`
+just because the walk reached the loop bound - that field is only honest once
+the `break`s are gone.
+
+### A symbol's real identity: `Symbol.Properties`, not its name
+
+A symbol's short name (`Q2`, `F2`, `Q_2L`) is an internal identifier, not a
+description - guessing what it draws or means from the name or from the
+IEC-designation letter convention (`Q` = switching device, `F` = protection
+device, etc.) is unreliable: `IEC_symbol/Q2` is a two-pole **rotary switch**,
+not a breaker, and `F2` is a **fuse**, not a circuit breaker, despite both
+prefixes suggesting "protection". `Symbol.Properties` (a `SymbolPropertyList`,
+reached the same ambiguous-overload way as `MDPart.Properties` above) carries
+the real, multilanguage answer:
+
+```csharp
+object props = TryRead(sym, "Properties", null);
+string desc     = SafeText(TryRead(props, "SYMB_DESC", null));      // "en_US@Power circuit breaker, two-pole..."
+string funcDesc = SafeText(TryRead(props, "FUNC_DESC", null));      // what each pin/connection means
+string category = SafeText(TryRead(props, "FUNC_CATEGORY", null));  // "en_US@Safety switch;..."
+string group    = SafeText(TryRead(props, "FUNC_CATEGORY_REGION", null)); // "en_US@Protection device;..."
+```
+
+Values are `;`-joined `lang_code@text` pairs (`en_US@...;es_ES@...;...`) - split
+on `;` and match the language you want rather than assuming English is first.
+Confirm a symbol's identity this way before placing it on a real page, not by
+pattern-matching its name.
+
 ## Practical notes
 
 - Wrap per-part processing in try/catch and continue the loop — a single corrupt part must not abort a full DB scan; log the part number.
