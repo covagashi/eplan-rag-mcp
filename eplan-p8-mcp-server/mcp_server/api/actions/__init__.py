@@ -328,6 +328,7 @@ from .live import (
     live_query_pages,
     live_set_function_text,
     live_set_connection_designations,
+    live_read_check_messages,
 )
 
 # Schematic authoring - the WRITE side of the live object model: create pages,
@@ -482,7 +483,7 @@ __all__ = [
     'list_layers', 'list_enums',
     # Live DataModel
     'live_query_functions', 'live_query_pages', 'live_set_function_text',
-    'live_set_connection_designations',
+    'live_set_connection_designations', 'live_read_check_messages',
     'live_symbol_catalog', 'live_create_page', 'live_place_symbol',
     'live_connect_pins', 'live_read_page', 'live_remove_placement',
     'live_verify_page', 'live_set_device_tag', 'live_read_connections',
