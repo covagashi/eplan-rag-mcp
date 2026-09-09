@@ -1,23 +1,94 @@
 # API Data Access (Parts Database, Properties)
 
-Some `Eplan.EplApi.*` API namespaces work directly inside scripts (no separate add-in needed): notably `Eplan.EplApi.MasterData` for the parts database.
+## The whole API is reachable — the restriction is compile-time only
 
-> **Important correction (documented 2026-08):** `using Eplan.EplApi.DataModel;` /
-> `using Eplan.EplApi.HEServices;` do **NOT** compile inside the EPLAN script
-> engine (CS0234 — the engine references a fixed assembly set). However, the
-> full object model IS reachable at **runtime** via reflection, which requires no
-> API project and no additional license. See
-> `e3d-installation-spaces.md` for the working recipe (LockingStep +
-> SelectionSet + InstallationSpace.Create).
->
-> **Do not hardcode the assembly name.** `Assembly.Load("Eplan.EplApi.DataModelu")`
-> works on 2025 but **fails on EPLAN 2027** with `BadImageFormatException`
-> (0x8007000B): there the managed object model is
-> `Eplan.EplApi.DataModelNetu` / `Eplan.EplApi.HEServicesNetu`, and the
-> un-suffixed name is the mixed-mode **native** twin. Both names exist in the
-> 2027 process, so this is a silent wrong-assembly pick. Resolve the type out of
-> `AppDomain.CurrentDomain.GetAssemblies()` instead — EPLAN already has the
-> managed assembly loaded — which works on both naming schemes.
+This is the single most important thing to get right, and it is easy to state
+backwards. There are **two** separate questions, and only the first has a
+restrictive answer:
+
+| | |
+|---|---|
+| Can I write `using Eplan.EplApi.X;`? | **Only for a fixed handful.** Everything else is CS0234. |
+| Can I reach `Eplan.EplApi.X` from a script at all? | **Yes — all of it**, via runtime reflection. No API project, no extra licence. |
+
+The script engine compiles against a **fixed assembly reference set** — `System`,
+`Eplan.EplApi.Base`, `Eplan.EplApi.ApplicationFramework`, `Eplan.EplApi.Gui`,
+`Eplan.EplApi.MasterData`, `Eplan.EplApi.Scripting`, `Eplan.IdentityClient`.
+A `using` outside that set fails to compile: confirmed for
+`Eplan.EplApi.DataModel`, `.HEServices` (2026-08) and `.EServices` (2026-09-08).
+That is a *compiler* reference list, not a capability boundary: the assemblies
+are in the same process and reflection sees all of them.
+
+**Measured live, EPLAN 2025.0.3, `C:\Program Files\EPLAN\Platform\2025.0.3\Bin`,
+2026-09-09** — sweep of `AppDomain.CurrentDomain.GetAssemblies()`:
+
+- **38** `Eplan*` assemblies loaded in the process
+- **26** `Eplan.EplApi.*` namespaces, **606** public types, **0** assemblies
+  that threw on `GetTypes()`
+- **6** further `Eplan.EplApi.*.dll` present but not preloaded
+  (`MasterDatau`, `RecorderToolsu`, `RemoteClientu`, `Starteru`,
+  `WebServicesu`, `WebServiceu`) — **all six loaded fine** via
+  `Assembly.Load(name)`. **Zero refusals.**
+
+So do not write "assume every `Eplan.EplApi.*` namespace is blocked". Assume
+every namespace is **available**; only the `using` needs the reflection detour.
+
+Largest namespaces by public type count: `DataModel` 214, `DataModel.E3D` 65,
+`DataModel.Graphics` 52, `HEServices` 43, `ApplicationFramework` 40, `Base` 37,
+`EServices` 22, `DataModel.Planning` 19, `DataModel.MasterData` 18,
+`DataModel.EObjects` 17, `EServices.Ged` 12, `Gui` 12. (A floor, not a ceiling —
+the count was taken before loading the six lazy assemblies, so
+`Eplan.EplApi.MasterData` itself is not in it.)
+
+Note `Eplan.EplApi.MasterDatau` is **not preloaded** yet `using
+Eplan.EplApi.MasterData;` compiles — it is in the compiler's reference set and
+loads on first use. Compile-time availability and runtime preloading are
+independent; do not infer one from the other.
+
+### Do not hardcode the assembly name — and do not assume the version rule
+
+`Assembly.Load("Eplan.EplApi.DataModelu")` **fails on EPLAN 2027** with
+`BadImageFormatException` (0x8007000B): there the managed object model is
+`Eplan.EplApi.DataModelNetu` / `Eplan.EplApi.HEServicesNetu` and the
+un-suffixed name is the mixed-mode **native** twin. Both names exist in the
+2027 process, so a hardcoded name is a silent wrong-assembly pick.
+
+But the naming is **not** simply "old = plain, new = Net": measured on
+**2025.0.3 the loaded managed assembly is `Eplan.EplApi.DataModelu`**, there is
+no `DataModelNetu` in the process, and nothing refuses to load. So the rule is
+not a version cutoff you can memorise — resolve the type out of
+`AppDomain.CurrentDomain.GetAssemblies()` first (EPLAN already has the managed
+assembly loaded), and only fall back to `Assembly.Load` of candidate names,
+newest scheme first. That works on every scheme without knowing which you are on.
+
+### `Eplan.EplApi.EServices`
+
+Third namespace in the CS0234 family, and where the itemized results of a check
+run live (`PrjMessagesCollection`) — NOT the store
+`get_system_messages`/`SysMessagesCollection` reads. See "Reading check-run
+messages" below.
+
+### `execute_custom_script`: what the wrapper already injects
+
+The MCP `eplan_execute_custom_script` wrapper prepends exactly three usings:
+`System`, `Eplan.EplApi.Base`, `Eplan.EplApi.Scripting`. Repeating them is a
+harmless **CS0105** warning. Everything else you use — `System.IO`,
+`System.Text`, `System.Reflection`, `System.Collections.Generic` — you must
+declare yourself, or you get a wall of CS0246/CS0103. Declaring all of them and
+eating the three CS0105 warnings is the safe default.
+
+That tool now **reports compile errors properly** (`errorType:
+"McpScriptNoResult"` with a `compile_errors` list carrying file, line, column
+and CS#### text, plus `failedScriptPath`) — verified 2026-09-09. The older
+failure mode, where a bad `using` surfaced only as `"Timeout waiting for script
+results"`, is fixed on that path. A slow compile can still exceed the
+foreground timeout and land as a background task; the diagnostics then arrive
+with the task notification.
+
+Incidentally `Eplan.EplApi.Scripting.StartAttribute` does **not** exist as a
+type name even though `[Start]` resolves — use
+`typeof(Eplan.EplApi.Base.BaseException).Assembly.Location` if you need the
+install's `Bin` directory.
 
 ## Parts database (`MDPartsManagement`)
 
