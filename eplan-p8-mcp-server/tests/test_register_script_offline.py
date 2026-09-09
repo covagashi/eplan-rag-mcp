@@ -17,6 +17,18 @@ CONTAINS a CS number, never by matching EPLAN's prose: the header and footer
 around the CS lines are localised (this machine reports in Spanish) while the
 CS codes are not. A test that matched on English text would pass here and fail
 on the machine it was meant to protect.
+
+WHY register_script DIFFS THE TREE instead of matching the filename the way
+execute_script does. Measured live on 2025.0.3, 2026-09-09: the compile block
+names the script in its header and footer, but the registration refusal is the
+bare line
+
+    "En el script no hay atributos disponibles para cargar."   (level Error)
+
+with no path in it at all. Filename matching literally cannot see it - a first
+attempt here did exactly that and the live test caught it. So register_script
+snapshots the tree before the call and reports what appeared, which is sound
+only because EPLAN's actions are synchronous.
 """
 
 import pytest
@@ -31,11 +43,11 @@ COMPILE_BLOCK = [
     "Script C:\\tmp\\hooks.cs could not be compiled.",
 ]
 
-# No CS number: it compiled, EPLAN just would not register it. Deliberately
-# written in Spanish, because that is what this installation emits and the
-# classifier must not care either way.
+# No CS number: it compiled, EPLAN just would not register it. This is the
+# VERBATIM text EPLAN 2025.0.3 emits (Spanish UI, level Error) - note it does
+# not name the script, which is the whole reason this tool diffs the tree.
 NO_ATTRIBUTES_BLOCK = [
-    "El script C:\\tmp\\hooks.cs no contiene atributos para la carga.",
+    "En el script no hay atributos disponibles para cargar.",
 ]
 
 
@@ -84,8 +96,11 @@ def test_clean_registration_returns_the_action_result(eplan, tmp_path):
     assert "compile_errors" not in result
 
 
-def test_other_scripts_complaints_do_not_condemn_this_one(eplan, tmp_path):
-    eplan["messages"] = ["El script C:\\tmp\\otro.cs no contiene atributos para la carga."]
+def test_pre_existing_complaints_do_not_condemn_this_run(eplan, tmp_path):
+    # Entries already in the tree belong to some earlier call. EPLAN never
+    # clears it, so without the before-snapshot every registration after the
+    # first failure would inherit it forever.
+    eplan["messages"] = list(NO_ATTRIBUTES_BLOCK)
     assert _register(tmp_path)["success"] is True
 
 
@@ -114,8 +129,18 @@ def test_classification_does_not_depend_on_the_message_language(eplan, tmp_path)
     # The same refusal in English must classify identically - the decision is
     # "does the block contain a CS number", not what the prose says.
     eplan["emit_on_run"] = [
-        "The script C:\\tmp\\hooks.cs does not contain attributes for loading."]
+        "The script does not contain attributes for loading."]
     assert _register(tmp_path)["errorType"] == "McpScriptRegisterFailed"
+
+
+def test_refusal_is_caught_even_though_it_never_names_the_script(eplan, tmp_path):
+    # The regression the live run exposed: the real message carries no path, so
+    # any filename-based attribution reports success for a failed registration.
+    eplan["emit_on_run"] = list(NO_ATTRIBUTES_BLOCK)
+    script_name = "hooks.cs"
+    assert script_name not in NO_ATTRIBUTES_BLOCK[0], \
+        "fixture drift - this test is meaningless if the message names the file"
+    assert _register(tmp_path, script_name)["success"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -131,22 +156,83 @@ def test_compile_failure_keeps_its_own_error_type(eplan, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Contract: severity. The no-attributes complaint's level is UNCONFIRMED, so
-# the tree is read at Warning - reading only Errors would miss it.
+# Contract: severity. Measured, not guessed - the refusal is logged at Error.
 # ---------------------------------------------------------------------------
 
-def test_tree_is_read_at_warning_level(eplan, tmp_path):
+def test_tree_is_read_at_error_level(eplan, tmp_path):
     _register(tmp_path)
     assert eplan["levels"], "the message tree was never consulted"
-    assert set(eplan["levels"]) == {"Warning"}, \
-        "register_script must not read at Error only - the no-attributes " \
-        "complaint may be a Warning, and would then go unnoticed"
+    assert set(eplan["levels"]) == {"Error"}, \
+        "the no-attributes refusal is logged at Error on 2025.0.3; reading " \
+        "wider only admits unrelated warnings into the diff"
 
 
-def test_snapshot_and_read_use_the_same_level(eplan, tmp_path):
-    # Mismatched levels would count different sets, making the skip meaningless.
+def test_before_and_after_reads_use_the_same_level(eplan, tmp_path):
+    # Mismatched levels would diff different sets, making the delta fiction.
     _register(tmp_path)
     assert len(set(eplan["levels"])) == 1
+
+
+def test_empty_tree_is_a_valid_baseline(eplan, tmp_path):
+    # A freshly started EPLAN has an empty error tree. Treating that as "no
+    # baseline" would silently disable the diagnostic exactly when it is most
+    # likely to be needed.
+    assert eplan["messages"] == []
+    eplan["emit_on_run"] = list(NO_ATTRIBUTES_BLOCK)
+    assert _register(tmp_path)["success"] is False
+
+
+def _two_reads(monkeypatch, first, second):
+    """Wire a fake whose message tree reads `first` then `second`."""
+    reads = {"n": 0}
+
+    class _Manager:
+        def execute_action(self, action):
+            return {"success": True, "message": "ok"}
+
+    def two_reads(min_level="Warning", max_messages=100):
+        reads["n"] += 1
+        texts = first if reads["n"] == 1 else second
+        return {"success": True, "messages": [{"text": t} for t in texts]}
+
+    monkeypatch.setattr(scripts_mod, "_get_connected_manager",
+                        lambda: (_Manager(), None), raising=False)
+    monkeypatch.setattr(scripted_mod, "get_system_messages", two_reads, raising=False)
+
+
+def test_a_slid_window_is_aligned_not_abandoned(monkeypatch, tmp_path):
+    """The read keeps only the newest N, so a full window slides as it grows.
+
+    An earlier version tested `before` for being a prefix of `after` and gave up
+    when it was not - which, once the tree is longer than the window, is ALWAYS,
+    so the diagnostic reported nothing precisely in the long-running sessions
+    where it is most needed. Four live tests failed that way in the full suite
+    while passing alone. Aligning on the overlap is the fix.
+    """
+    _two_reads(monkeypatch,
+               ["old-1", "old-2"],
+               ["old-2", NO_ATTRIBUTES_BLOCK[0]])   # slid by one, one new entry
+    result = _register(tmp_path)
+    assert result["success"] is False
+    assert result["compile_errors"] == [NO_ATTRIBUTES_BLOCK[0]], \
+        "the delta must be exactly what appeared, not the whole window"
+
+
+def test_an_unalignable_tree_is_refused_rather_than_guessed(monkeypatch, tmp_path):
+    # No shift lines the two reads up: the tree was cleared or rewritten, and
+    # any 'delta' would be unrelated messages blamed on this call.
+    _two_reads(monkeypatch,
+               ["old-1", "old-2"],
+               ["something", "entirely", "different"])
+    assert _register(tmp_path)["success"] is True
+
+
+def test_growth_without_sliding_is_still_detected(monkeypatch, tmp_path):
+    # The window is not full: `before` really is a prefix of `after`.
+    _two_reads(monkeypatch,
+               ["old-1"],
+               ["old-1", NO_ATTRIBUTES_BLOCK[0]])
+    assert _register(tmp_path)["success"] is False
 
 
 # ---------------------------------------------------------------------------

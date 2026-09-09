@@ -30,34 +30,70 @@ import os
 import pytest
 
 from api.actions import execute_script, register_script, unregister_script
-from api.actions._base import _get_connected_manager
+from eplan_connection import get_manager
 
 
 pytestmark = pytest.mark.live
 
 
-def _eplan_available() -> bool:
-    """True when EPLAN answers the remote-control channel.
+@pytest.fixture(scope="module", autouse=True)
+def live_eplan():
+    """Connect for this module only, and hand the connection back as found.
 
-    Ping rather than the manager's `connected` flag: that flag stays True after
-    EPLAN stops answering. Observed 2026-09-09 - eplan_status reported
-    connected while eplan_ping said alive=False, because a modal dialog had
-    blocked the script engine. A live test gated on `connected` would have hung
-    there instead of skipping.
+    A FIXTURE and not a `skipif`, which is where the first version went wrong.
+    `skipif` is evaluated during COLLECTION, so connecting there mutates the
+    shared singleton manager before a single test runs - and four
+    "degrades without a connection" tests in test_catalog_offline.py then failed,
+    having been collected as offline tests and executed against a live EPLAN.
+    They passed in isolation and failed in the full suite, which is the worst
+    shape a test failure can have. A module-scoped fixture connects when this
+    module actually starts and restores the prior state afterwards.
+
+    Connecting at all is necessary: pytest runs in its own process, whose
+    manager starts disconnected and never auto-connects, so gating on the
+    existing connection would skip every test on a machine where EPLAN is
+    running perfectly - a live tier that can never run is decoration.
+
+    `connect()` auto-detects the port rather than assuming DEFAULT_PORT: EPLAN
+    came back on 49153 after a restart on 2026-09-09, having been on 49152 all
+    day.
+
+    Then ping, rather than trusting the manager's `connected` flag - that flag
+    stays True after EPLAN stops answering. Observed the same day: eplan_status
+    reported connected while eplan_ping said alive=False, because a modal dialog
+    had blocked the script engine. Gating on `connected` would have hung here
+    instead of skipping.
     """
+    manager = get_manager()
+    was_connected = manager.connected
+    if not was_connected:
+        try:
+            manager.connect()
+        except Exception:
+            pass
+
+    alive = False
     try:
-        manager, error = _get_connected_manager()
-        if error or manager is None:
-            return False
-        return manager.ping().get("alive") is True
+        alive = manager.connected and manager.ping().get("alive") is True
     except Exception:
-        return False
+        alive = False
 
+    if not alive:
+        if not was_connected:
+            try:
+                manager.disconnect()
+            except Exception:
+                pass
+        pytest.skip("no EPLAN answering the remote-control channel "
+                    "(ping said not alive)")
 
-requires_eplan = pytest.mark.skipif(
-    not _eplan_available(),
-    reason="no EPLAN answering the remote-control channel (ping said not alive)",
-)
+    yield manager
+
+    if not was_connected:
+        try:
+            manager.disconnect()
+        except Exception:
+            pass
 
 
 GOOD_SCRIPT = '''using System;
@@ -98,7 +134,7 @@ def _write(tmp_path, name, content):
     return str(path)
 
 
-@requires_eplan
+
 def test_a_working_script_still_reports_success(tmp_path):
     marker = os.path.join(str(tmp_path), "ok.txt")
     # The generated path lands in a C# @"..." verbatim literal, where a doubled
@@ -115,7 +151,7 @@ def test_a_working_script_still_reports_success(tmp_path):
         "failure this tool is supposed to stop reporting as success"
 
 
-@requires_eplan
+
 def test_a_broken_script_is_reported_as_a_compile_failure(tmp_path):
     script = _write(tmp_path, "mcp_live_broken.cs", BAD_SCRIPT)
 
@@ -127,7 +163,7 @@ def test_a_broken_script_is_reported_as_a_compile_failure(tmp_path):
     assert result["script_file"] == script
 
 
-@requires_eplan
+
 def test_the_real_diagnostic_reaches_the_caller(tmp_path):
     script = _write(tmp_path, "mcp_live_diag.cs", BAD_SCRIPT)
 
@@ -143,7 +179,7 @@ def test_the_real_diagnostic_reaches_the_caller(tmp_path):
         "the diagnostic must be attributable to THIS script file"
 
 
-@requires_eplan
+
 def test_a_fixed_script_stops_being_reported_as_broken(tmp_path):
     """The regression the skip_matches snapshot exists to prevent.
 
@@ -169,14 +205,22 @@ def test_a_fixed_script_stops_being_reported_as_broken(tmp_path):
 # install; the offline suite can only assert we classify a block we invented.
 # ---------------------------------------------------------------------------
 
-@requires_eplan
+
 def test_registering_a_start_only_script_is_reported_as_refused(tmp_path):
     """A [Start]-only script has nothing to register, and EPLAN says so.
 
     This is THE case that went unnoticed for a long time: RegisterScript
-    returned success in ~0.45s while EPLAN complained in its own UI. If this
-    test fails, either EPLAN stopped complaining or it stopped naming the file
-    in the complaint - and in the latter case the tool is silently blind again.
+    returned success in ~0.45s while EPLAN complained in its own UI.
+
+    It is also the test that corrected the implementation. The first version of
+    register_script attributed complaints by filename, the way execute_script
+    does, and this test failed against a real EPLAN because the refusal carries
+    NO path - measured 2026-09-09 on 2025.0.3, Spanish UI:
+
+        "En el script no hay atributos disponibles para cargar."  (level Error)
+
+    Hence the tree diff. If this ever fails again, check first whether EPLAN
+    still emits that line at all: silence there means the tool is blind again.
     """
     marker = os.path.join(str(tmp_path), "reg.txt")
     script = _write(tmp_path, "mcp_live_startonly.cs", GOOD_SCRIPT % marker)
@@ -189,15 +233,16 @@ def test_registering_a_start_only_script_is_reported_as_refused(tmp_path):
     # It compiled - calling it a compile error would send the reader hunting
     # for a syntax error that is not there.
     blob = " ".join(result.get("compile_errors") or [])
+    assert blob.strip(), "the refusal reached us empty - nothing to report"
     assert "CS" not in blob, result
-    assert os.path.basename(script) in blob, \
-        "the complaint must be attributable to THIS script file"
+    # Deliberately NOT asserting the script name appears: it does not, and an
+    # assertion that it should is what sent the first implementation wrong.
 
     # Leave nothing behind even though nothing should have registered.
     unregister_script(script)
 
 
-@requires_eplan
+
 def test_registering_a_script_that_does_not_compile_is_a_compile_error(tmp_path):
     script = _write(tmp_path, "mcp_live_regbroken.cs", BAD_SCRIPT)
 

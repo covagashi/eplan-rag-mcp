@@ -414,6 +414,12 @@ def api_describe(type_name: str, members: str = "all", contains: str = None,
             else if (target.IsValueType) kind = "struct";
             results["kind"] = kind;
 
+            // An enum's base chain is System.Enum -> System.ValueType, which
+            // contributes 31 inherited methods (Parse, ToObject x8, HasFlag...)
+            // and not one fact about the enum. The answer wanted from an enum is
+            // its members, so never walk past it.
+            if (target.IsEnum) walkBase = false;
+
             List<string> chain = new List<string>();
             Type cur = target;
             while (cur != null && cur.FullName != "System.Object")

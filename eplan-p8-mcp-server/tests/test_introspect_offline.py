@@ -275,6 +275,15 @@ def test_describe_reports_enum_numeric_values(capture):
     assert "Convert.ToInt64(v)" in cs
 
 
+def test_describe_does_not_walk_an_enums_base_chain(capture):
+    # Measured live: describing MoveKind returned its 2 members plus 31
+    # inherited System.Enum/System.ValueType methods (Parse, ToObject x8,
+    # HasFlag...), none of which says anything about the enum.
+    introspect.api_describe(
+        type_name="Eplan.EplApi.HEServices.Insert+MoveKind")
+    assert "if (target.IsEnum) walkBase = false;" in capture["script"]
+
+
 def test_describe_nested_type_name_survives_escaping(capture):
     nested = "Eplan.EplApi.DataModel.MasterData.PageMacro+Enums+NumerationMode"
     introspect.api_describe(type_name=nested)

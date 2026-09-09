@@ -14,8 +14,8 @@ safety context at call time.
 
 from ._base import _get_connected_manager, _build_action
 from .scripted import (
-    _compile_errors_for,
-    count_script_mentions,
+    new_messages_since,
+    snapshot_message_texts,
     summarise_compile_errors,
 )
 
@@ -46,29 +46,22 @@ def _reject_remote_path(path: str, what: str = "script_file"):
     return None
 
 
-def _diagnose_after_run(script_file: str, seen_before: int,
-                        min_level: str = "Error") -> dict:
+def _classify_complaint(script_file: str, entries: list) -> dict:
     """
-    Did EPLAN just log a complaint about this script? Returns an error dict, or
-    None when it logged nothing new.
+    Turn a block of EPLAN messages into an error dict, or None if there is none.
 
-    Shared by execute_script and register_script because they have the same
-    structural blind spot: the remote call returns success in well under a
-    second whether or not anything worked, and EPLAN's real objection - a
-    compile failure, or a script with no loadable attributes - goes only to its
-    own system-message tree.
-
-    `seen_before` must come from count_script_mentions() taken BEFORE the call,
-    with the same min_level. That is what confines the verdict to this run: a
-    caller-supplied basename is reused across runs and EPLAN never clears its
-    tree, so without it a script the user just fixed keeps being reported broken.
+    Shared by execute_script and register_script, which have the same structural
+    blind spot: the remote call returns success in well under a second whether
+    or not anything worked, and EPLAN's real objection goes only to its own
+    system-message tree. They differ only in how they decide which messages are
+    theirs - see each one's docstring.
 
     The errorType is decided by what the block CONTAINS, never by matching
-    EPLAN's prose - the header and footer around the CS lines are localised
-    (this machine reports in Spanish), while the CS#### codes are not.
+    EPLAN's prose. The header and footer around the CS lines are localised
+    (measured in Spanish on this installation) while the CS#### codes are not,
+    so a classifier keyed on English text would pass its tests and fail on the
+    machine it was written for.
     """
-    entries = _compile_errors_for(script_file, skip_matches=seen_before,
-                                  min_level=min_level)
     if not entries:
         return None
 
@@ -116,14 +109,21 @@ def register_script(script_file: str) -> dict:
     comment in scripted._execute_script. So this reads that tree afterwards and
     reports what EPLAN said.
 
-    The tree is read at Warning level rather than Error, because it has NOT been
-    confirmed which severity EPLAN uses for the no-attributes complaint, and
-    reading only Errors would miss it if it is a Warning. Consequence: an
-    unrelated warning that happens to name this file would be reported too.
+    Like execute_script, it attributes by DIFFING the tree across the call. Here
+    that is not merely convenient but the ONLY option: measured on EPLAN
+    2025.0.3, 2026-09-09, the compile block names the file in its header and
+    footer, while the registration refusal is the bare line
 
-    success=True therefore means "EPLAN logged nothing against this file" - not
-    proof the hooks are live. Confirm with eplan_action_catalog / a [DeclareAction]
-    call if that matters.
+        "En el script no hay atributos disponibles para cargar."   (level Error)
+
+    with no path in it at all, so filename matching cannot see it. The diff is
+    sound because EPLAN's actions are synchronous here; it tolerates the read
+    window sliding, and refuses to report anything if the two reads cannot be
+    aligned at all.
+
+    success=True therefore means "EPLAN logged nothing new while registering" -
+    not proof the hooks are live. Confirm with a [DeclareAction] call if that
+    matters.
 
     Returns:
         On success, the underlying action result. Otherwise
@@ -141,7 +141,9 @@ def register_script(script_file: str) -> dict:
     if error:
         return error
 
-    seen_before = count_script_mentions(script_file, min_level="Warning")
+    # Error, not Warning: the refusal's severity was a guess until it was
+    # measured, and it is Error.
+    before = snapshot_message_texts(min_level="Error")
 
     action = _build_action(
         "RegisterScript",
@@ -153,8 +155,8 @@ def register_script(script_file: str) -> dict:
     if not isinstance(result, dict) or not result.get("success"):
         return result
 
-    return _diagnose_after_run(script_file, seen_before,
-                               min_level="Warning") or result
+    return _classify_complaint(script_file,
+                               new_messages_since(before, min_level="Error")) or result
 
 
 def unregister_script(script_file: str) -> dict:
@@ -206,6 +208,14 @@ def execute_script(script_file: str) -> dict:
     it. So this checks that tree afterwards and reports the CS#### lines instead
     of the cheerful "Executed directly" that a broken script used to get.
 
+    Attribution is by DIFFING the tree across the call, not by matching the
+    script's filename. Filename matching was the first design and it is more
+    precise in principle, but it breaks in exactly the situation that matters:
+    the tree read is windowed, a caller-supplied basename repeats across runs,
+    and once enough entries accumulate the window slides and the count-based
+    skip discards the real block. The diff is sound because EPLAN's actions are
+    synchronous here.
+
     success=True therefore means "EPLAN compiled it and logged no error against
     it" - NOT that the script did what you wanted. Unlike
     execute_custom_script, an arbitrary file has no {{RESULT_PATH}} contract, so
@@ -232,11 +242,10 @@ def execute_script(script_file: str) -> dict:
     if error:
         return error
 
-    # Snapshot first: a caller-supplied basename is not unique the way a
-    # generated script_<uuid>.cs is, so without this a second run of the same
-    # path would inherit the first run's errors - and a script the user just
-    # fixed would keep being reported as broken.
-    seen_before = count_script_mentions(script_file)
+    # Snapshot first: EPLAN never clears its tree, so without a baseline a
+    # second run of the same path would inherit the first run's errors and a
+    # script the user just fixed would keep being reported as broken.
+    before = snapshot_message_texts(min_level="Error")
 
     action = _build_action(
         "ExecuteScript",
@@ -248,4 +257,6 @@ def execute_script(script_file: str) -> dict:
     if not isinstance(result, dict) or not result.get("success"):
         return result
 
-    return _diagnose_after_run(script_file, seen_before) or result
+    return _classify_complaint(
+        script_file,
+        new_messages_since(before, min_level="Error")) or result

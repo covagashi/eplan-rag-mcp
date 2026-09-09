@@ -189,6 +189,81 @@ def count_script_mentions(script_path: str, min_level: str = "Error") -> int:
         _collecting_diagnostics = False
 
 
+# The message tree read is windowed - get_system_messages keeps the NEWEST N.
+# 200 was too small: after a few runs the tree holds enough that a window
+# already full slides by exactly the number of entries a call adds, which is
+# what broke the first version of the diff. 1000 makes a slide rare, and
+# new_messages_since() handles it correctly when it does happen anyway.
+_DIAGNOSTIC_WINDOW = 1000
+
+
+def snapshot_message_texts(min_level: str = "Error") -> list:
+    """
+    The message tree's texts right now, oldest first - a "before" mark.
+
+    Filename matching only works when EPLAN names the file. Measured 2026-09-09
+    on 2025.0.3: the compile block does, in both its header and footer, and the
+    registration refusal does NOT - it is the bare line "En el script no hay
+    atributos disponibles para cargar." with no path in it at all. Diffing the
+    tree across a call attributes both, so it is the single mechanism used.
+
+    Returns None - NOT [] - when the tree could not be read, so a caller can
+    tell "no baseline" from "the tree was legitimately empty". Conflating those
+    two is how an empty tree, the normal state on a freshly started EPLAN, would
+    silently disable the whole diagnostic.
+    """
+    global _collecting_diagnostics
+    if _collecting_diagnostics:
+        return None
+    _collecting_diagnostics = True
+    try:
+        res = get_system_messages(min_level=min_level,
+                                  max_messages=_DIAGNOSTIC_WINDOW)
+        if not res.get("success"):
+            return None
+        return [m.get("text", "") for m in res.get("messages") or []]
+    except Exception:
+        return None
+    finally:
+        _collecting_diagnostics = False
+
+
+def new_messages_since(before, min_level: str = "Error") -> list:
+    """
+    What the tree gained since `before` was taken.
+
+    Sound only because EPLAN's actions are synchronous here: nothing else is
+    logging between the two reads, so whatever appeared belongs to the call in
+    between.
+
+    Tolerates a slid window. The read keeps only the newest N messages, so once
+    the tree is longer than N, adding K entries also drops K off the front and
+    `before` is no longer a prefix of `after` - it is a prefix of after shifted
+    by K. A first version tested only for the un-slid case and reported nothing
+    at all in a long-running session, which is exactly the case where a
+    diagnostic is most needed. So find the smallest shift that aligns them and
+    take what follows.
+
+    Returns [] when nothing is new, when `before` is None (no baseline - a
+    diagnostic must never invent a verdict), or when no shift aligns the two at
+    all. That last case means something cleared or rewrote the tree, and a
+    delta would be fiction.
+    """
+    if before is None:
+        return []
+    after = snapshot_message_texts(min_level=min_level)
+    if after is None:
+        return []
+    if not before:
+        return list(after)
+
+    for shift in range(len(before)):
+        overlap = before[shift:]
+        if after[:len(overlap)] == overlap:
+            return after[len(overlap):]
+    return []
+
+
 def summarise_compile_errors(compile_errors: list) -> str:
     """
     One line naming the real compile error.
