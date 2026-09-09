@@ -7,8 +7,8 @@ are EPLAN's format and not ours — so a release that changes them, or a
 differently localised install, breaks the fix while every offline test stays
 green.
 
-**Measured: 2026-09-09, EPLAN Electric P8 2025.0.3, remoting port 49153, Spanish
-UI.** All six tests in `tests/test_execute_script_live.py` pass.
+**Measured: 2026-09-09, EPLAN Electric P8 2025.0.3, remoting port 49152/49153,
+Spanish UI.** All eight tests in `tests/test_execute_script_live.py` pass.
 
 The run changed the implementation. `register_script` originally attributed
 complaints by filename, the way `execute_script` does; the live test failed
@@ -48,7 +48,7 @@ cd eplan-p8-mcp-server
 python -m pytest tests/test_execute_script_live.py -v -rs
 ```
 
-Four tests; all skip with `no EPLAN answering the remote-control channel` when
+Eight tests; all skip with `no EPLAN answering the remote-control channel` when
 none does. They write nothing into any project — both scripts are generated into
 `tmp_path`, and the good one only writes a marker file back there — so no
 scratch project is needed and whatever is open is safe.
@@ -67,6 +67,10 @@ connected MCP server is running the *installed* code, not your working tree.
 | 5 | fix `broken.cs`, run again | `success=true` — the previous run's errors are NOT re-attributed ✅ |
 | 6 | `register_script(start_only.cs)` | `success=false`, `errorType="McpScriptRegisterFailed"`, **one line, no CS number, no path** ✅ |
 | 7 | `register_script(broken.cs)` | `success=false`, `errorType="McpScriptCompileError"`, CS0246 present ✅ |
+| 8 | `execute_raw_action("<name never declared>")` | `success=false`, action-not-found ✅ — but see the executor split below |
+| 9 | `register_script(declare.cs)`, then call the declared action | `success=true`, the action now resolves, **and the marker file is written** ✅ |
+| 10 | `unregister_script`, then call it again | action stops resolving, marker unchanged ✅ |
+| 11 | `unregister_script(<never registered>)` and `(<no such file>)` | `success=true` both — a silent no-op ✅ |
 
 ### The exact strings (2025.0.3, Spanish UI)
 
@@ -166,12 +170,45 @@ case for its own script, which is as far as a generic tool can go — if you nee
 the outcome of your script, have it write a file and read that yourself.
 
 For `register_script`, `success=True` means "EPLAN logged nothing against this
-file at Warning level or above". It is **not** proof the hooks are live —
-nothing here calls a `[DeclareAction]` to confirm one actually fires. Rows 6 and
-7 prove the failures are caught; proving a *successful* registration really
-registered something would need a script that declares an action, plus a call to
-it, and is not attempted.
+file at Error level or above". Rows 6 and 7 prove the failures are caught. That
+it is also proof the hooks are **live** is now measured rather than assumed —
+row 9 registers a `[DeclareAction]`, calls the action, and reads the file the
+action writes; row 10 shows the hook going away again with `unregister_script`.
+Two things had to be true for that round trip to mean anything, and both were
+measured rather than reasoned about:
 
-Still uncovered anywhere: whether an `UnregisterScript` of a path that was never
-registered is a no-op or an error. `unregister_script` reports whatever the
-action says and adds no diagnosis of its own.
+- **A registration persists for the rest of the EPLAN session.** So the test's
+  action name carries a uuid. With a fixed name, a run that died before its
+  teardown would leave a live hook behind, and the next run's baseline call
+  would fire the *previous* run's script — pointed at a `tmp_path` that no
+  longer exists.
+- **`UnregisterScript` on a path that was never registered is a silent no-op**
+  (row 11), for a real-but-unregistered script and for a path with no file at
+  all alike. That was an open question before; it is what lets teardown
+  unregister unconditionally.
+
+### The executor split, which row 8 only half tells
+
+An action name EPLAN has never heard of is reported — `success=false`,
+`errorType` `Eplan.EplApi.Base.BaseException`, `"No se ha podido encontrar la
+acción 'X'. No está incluida en el conjunto de funciones."` — but only through
+the tool surface. Every wrapper in `api/actions/` gets its manager from
+`_base._get_connected_manager`, whose `QuietManagerWrapper` forces
+`quiet_mode=True`; that routes through the generated script, which resolves via
+`ActionManager.FindAction` and lets the exception propagate.
+
+A bare `manager.execute_action(name)` takes the DIRECT path instead and returns
+
+```json
+{"success": true, "message": "Executed directly: ThisActionCertainlyDoesNotExist12345"}
+```
+
+for an action that does not exist. Measured both ways on 2026-09-09, same
+session, same name.
+
+This is the same silent-success hole as the one at the top of this file, and
+`RegisterScript` / `ExecuteScript` / `UnregisterScript` are pinned to that
+direct path *on purpose* — `quiet_mode` would have them recurse through a
+generated script that itself needs ExecuteScript. Hence the message-tree diff:
+it is not belt-and-braces over an executor that would have reported the failure
+anyway, it is the only reporting those three can have.

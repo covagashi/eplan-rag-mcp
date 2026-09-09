@@ -166,6 +166,12 @@ def unregister_script(script_file: str) -> dict:
     Undoes register_script: the [DeclareAction] / [DeclareEventHandler] /
     [DeclareMenu] handlers it installed stop firing on user actions.
 
+    Unregistering a path that was never registered is a SILENT NO-OP, not an
+    error - measured on EPLAN 2025.0.3, 2026-09-09, for an unregistered-but-real
+    script and for a path with no file at all alike. Both come back success=true.
+    So teardown can call this unconditionally, and success here is no evidence
+    that anything was ever registered.
+
     Args:
         script_file: The same local path that was registered. UNC paths are
             refused, as everywhere in this module.

@@ -26,10 +26,12 @@ Observed results belong in tests/live-expectations/execute_script_compile.md.
 """
 
 import os
+import uuid
 
 import pytest
 
-from api.actions import execute_script, register_script, unregister_script
+from api.actions import (execute_raw_action, execute_script, register_script,
+                         unregister_script)
 from eplan_connection import get_manager
 
 
@@ -251,3 +253,99 @@ def test_registering_a_script_that_does_not_compile_is_a_compile_error(tmp_path)
     assert result["success"] is False
     assert result["errorType"] == "McpScriptCompileError", result
     assert "CS0246" in " ".join(result.get("compile_errors") or [])
+
+
+# ---------------------------------------------------------------------------
+# The round trip register_script could not prove on its own: that a registered
+# [DeclareAction] hook is actually LIVE. Rows 6 and 7 above only prove the
+# failures are caught; success=True meant no more than "EPLAN logged nothing".
+# ---------------------------------------------------------------------------
+
+DECLARE_SCRIPT = '''using System;
+using System.IO;
+using Eplan.EplApi.Scripting;
+
+public class McpLiveProbeDeclare
+{
+    [DeclareAction("%(action)s")]
+    public void MyAction()
+    {
+        File.AppendAllText(@"%(marker)s", "fired ");
+    }
+}
+'''
+
+
+def test_a_registered_declareaction_actually_fires(tmp_path):
+    """Register a [DeclareAction], call it, and prove it ran - then that it stops.
+
+    The one thing `register_script` cannot tell you about itself. Its
+    success=True means only "EPLAN logged no complaint at Error level while
+    registering"; nothing in rows 6-7 shows a hook that works. This calls the
+    declared action and reads the file it writes, which is the only evidence
+    available - see the baseline assertion below for why the action result is
+    not evidence of anything.
+
+    The action name carries a uuid. A registration PERSISTS for the rest of the
+    EPLAN session, so a fixed name would let a run that died before its teardown
+    leave a live hook behind, and the next run's baseline would then fire the
+    PREVIOUS run's script - pointed at a tmp_path that no longer exists.
+    """
+    action_name = "McpLiveProbeAction_" + uuid.uuid4().hex[:12]
+    marker = os.path.join(str(tmp_path), "fired.txt")
+    script = _write(tmp_path, "mcp_live_declact.cs",
+                    DECLARE_SCRIPT % {"action": action_name, "marker": marker})
+
+    # Baseline: EPLAN does not know this action yet, and SAYS so. Measured
+    # 2026-09-09 on 2025.0.3 - the tool surface reports
+    #   errorType "Eplan.EplApi.Base.BaseException"
+    #   "No se ha podido encontrar la accion 'X'. No esta incluida en el
+    #    conjunto de funciones."
+    # That reporting is not free and not universal: every wrapper in
+    # api/actions/ goes through _base.QuietManagerWrapper, which forces
+    # quiet_mode=True and so routes via ActionManager.FindAction, where a
+    # missing action raises. A bare manager.execute_action(name) takes the
+    # DIRECT path instead and returns {"success": true, "message": "Executed
+    # directly: X"} for an action that does not exist - confirmed against a
+    # garbage name. Worth keeping straight, because RegisterScript,
+    # ExecuteScript and UnregisterScript are pinned to that direct path on
+    # purpose (quiet_mode would recurse), which is exactly why those three
+    # need the message-tree diff to learn anything at all.
+    before = execute_raw_action(action_name)
+    assert before["success"] is False,         "an action nobody has declared came back as success - "         "the not-found report this test reads is gone"
+    assert not os.path.exists(marker),         "something fired before registration - a previous run leaked a hook?"
+
+    registered = register_script(script)
+    try:
+        assert registered["success"] is True, registered
+
+        # Now EPLAN resolves it, which is already evidence the attribute was
+        # loaded - and the marker proves the body actually ran.
+        fired = execute_raw_action(action_name)
+        assert fired["success"] is True, fired
+        assert os.path.exists(marker),             "register_script reported success but the declared action did not "             "fire - the hooks are not live and success=True is meaningless"
+        assert open(marker).read() == "fired "
+    finally:
+        unregister_script(script)
+
+    # And the hook is gone: the action stops resolving, and the marker keeps
+    # exactly the one write from while it was registered.
+    after = execute_raw_action(action_name)
+    assert after["success"] is False,         "the action still resolves after unregister_script - the hook outlived it"
+    assert open(marker).read() == "fired ",         "the action still fires after unregister_script - the hook outlived it"
+
+
+def test_unregistering_a_path_that_was_never_registered_is_a_noop(tmp_path):
+    """Open question until measured: error, or silence? It is silence.
+
+    Both an unregistered-but-real script and a path with no file at all come
+    back success=true. Worth pinning: teardown code that unregisters
+    unconditionally - which this module's own tests do - would break the moment
+    EPLAN started objecting.
+    """
+    never = _write(tmp_path, "mcp_live_never_registered.cs",
+                   DECLARE_SCRIPT % {"action": "McpNeverRegistered",
+                                     "marker": os.path.join(str(tmp_path), "x.txt")})
+
+    assert unregister_script(never)["success"] is True
+    assert unregister_script(os.path.join(str(tmp_path), "no_such_file.cs"))["success"] is True
