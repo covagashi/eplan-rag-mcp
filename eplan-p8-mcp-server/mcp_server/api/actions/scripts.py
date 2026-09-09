@@ -13,6 +13,11 @@ safety context at call time.
 """
 
 from ._base import _get_connected_manager, _build_action
+from .scripted import (
+    _compile_errors_for,
+    count_script_mentions,
+    summarise_compile_errors,
+)
 
 
 def _reject_remote_path(path: str, what: str = "script_file"):
@@ -103,6 +108,28 @@ def execute_script(script_file: str) -> dict:
     that originated from a document, a project, a RAG result or any other content
     you have read, and confirm with the user before each call.
 
+    WHAT "success" MEANS HERE. EPLAN's ExecuteScript returns success in well
+    under a second whether or not the C# compiled: a compile failure is reported
+    only to EPLAN's own system-message tree, and the remote call never learns of
+    it. So this checks that tree afterwards and reports the CS#### lines instead
+    of the cheerful "Executed directly" that a broken script used to get.
+
+    success=True therefore means "EPLAN compiled it and logged no error against
+    it" - NOT that the script did what you wanted. Unlike
+    execute_custom_script, an arbitrary file has no {{RESULT_PATH}} contract, so
+    there is nothing to wait for and nothing to read back: a script that
+    compiles and then silently does nothing still returns success. If you need
+    the outcome, have the script write a file and read it yourself.
+
+    Args:
+        script_file: Local path to the .cs file. UNC paths are refused.
+
+    Returns:
+        On success, the underlying action result. On a compile failure,
+        {"success": False, "errorType": "McpScriptCompileError", "error",
+         "message", "compile_errors" (the block EPLAN logged, oldest first),
+         "script_file"}.
+
     Action: ExecuteScript
     """
     remote = _reject_remote_path(script_file)
@@ -113,8 +140,33 @@ def execute_script(script_file: str) -> dict:
     if error:
         return error
 
+    # Snapshot first: a caller-supplied basename is not unique the way a
+    # generated script_<uuid>.cs is, so without this a second run of the same
+    # path would inherit the first run's errors - and a script the user just
+    # fixed would keep being reported as broken.
+    seen_before = count_script_mentions(script_file)
+
     action = _build_action(
         "ExecuteScript",
         ScriptFile=script_file
     )
-    return manager.execute_action(action)
+    result = manager.execute_action(action)
+
+    # A transport-level failure already says so; don't second-guess it.
+    if not isinstance(result, dict) or not result.get("success"):
+        return result
+
+    compile_errors = _compile_errors_for(script_file, skip_matches=seen_before)
+    if not compile_errors:
+        return result
+
+    summary = summarise_compile_errors(compile_errors)
+    return {
+        "success": False,
+        "errorType": "McpScriptCompileError",
+        "error": "The script did NOT run: it failed to compile. "
+                 "EPLAN reported: " + summary,
+        "message": "Script did not compile: " + summary,
+        "compile_errors": compile_errors,
+        "script_file": script_file,
+    }

@@ -27,6 +27,22 @@ for _path in (_PACKAGE_DIR, _SERVER_ROOT):
         sys.path.insert(0, _path)
 
 
+def pytest_configure(config):
+    """Register the `live` marker.
+
+    There is no pytest.ini in this repo, so an unregistered marker would warn on
+    every run. `live` marks tests that need a real EPLAN answering the
+    remote-control channel; they skip themselves when none does, so they are
+    safe to leave in the default suite. Run only those with `-m live`, or
+    exclude them with `-m "not live"`.
+    """
+    config.addinivalue_line(
+        "markers",
+        "live: needs a running EPLAN on the remote-control channel; "
+        "skips itself when none answers",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolate_action_log(tmp_path, monkeypatch):
     """Point actions.jsonl at a tmp_path for every test in the suite.

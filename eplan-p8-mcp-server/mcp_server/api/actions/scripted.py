@@ -157,7 +157,53 @@ def _preserve_failed_script(script_path: str):
 _collecting_diagnostics = False
 
 
-def _compile_errors_for(script_path: str) -> list:
+def count_script_mentions(script_path: str) -> int:
+    """
+    How many entries in EPLAN's error tree currently mention this script file.
+
+    Snapshot this BEFORE running a caller-supplied script so that only the
+    entries added afterwards get attributed to that run. A generated script is
+    named script_<uuid>.cs and so is self-identifying, but a path handed to
+    `execute_script` is not: running the same file twice would otherwise make
+    the first run's compile errors look like the second run's, and a fixed
+    script would keep reporting the error it no longer has.
+    """
+    global _collecting_diagnostics
+    if _collecting_diagnostics:
+        return 0
+    _collecting_diagnostics = True
+    try:
+        res = get_system_messages(min_level="Error", max_messages=200)
+        if not res.get("success"):
+            return 0
+        basename = os.path.basename(script_path)
+        return sum(1 for m in res.get("messages") or []
+                   if basename in (m.get("text") or ""))
+    except Exception:
+        # A diagnostic must never turn a working call into a failure.
+        return 0
+    finally:
+        _collecting_diagnostics = False
+
+
+def summarise_compile_errors(compile_errors: list) -> str:
+    """
+    One line naming the real compile error.
+
+    CS0105 ("using directive appeared previously") fires on almost every script,
+    because EPLAN pre-imports namespaces the script also declares, and is never
+    why one failed - so it is kept in the full list but never allowed to crowd
+    out the actual error.
+    """
+    cs_lines = [e for e in compile_errors if e.startswith("CS")]
+    return " | ".join(
+        [e for e in cs_lines if not e.startswith("CS0105")]
+        or cs_lines
+        or compile_errors
+    )
+
+
+def _compile_errors_for(script_path: str, skip_matches: int = 0) -> list:
     """
     Ask EPLAN why a script produced no result file.
 
@@ -171,6 +217,10 @@ def _compile_errors_for(script_path: str) -> list:
     "<file> cannot be compiled" footer), oldest first - or [] if EPLAN
     logged none, which means a genuine timeout: the script compiled and is
     still running, or it died without writing its result.
+
+    `skip_matches` ignores that many leading mentions of the file, so a caller
+    that snapshotted count_script_mentions() before the run sees only what this
+    run added. Generated scripts carry a per-execution uuid and so leave it 0.
     """
     global _collecting_diagnostics
     if _collecting_diagnostics:
@@ -185,6 +235,8 @@ def _compile_errors_for(script_path: str) -> list:
         basename = os.path.basename(script_path)
         texts = [m.get("text", "") for m in res.get("messages") or []]
         marked = [i for i, t in enumerate(texts) if basename in t]
+        if skip_matches:
+            marked = marked[skip_matches:]
         if not marked:
             return []
         return texts[marked[0]:marked[-1] + 1]
@@ -292,17 +344,7 @@ def _execute_script(script_content: str, timeout: float = 30.0) -> dict:
                 }
 
                 if compile_errors:
-                    cs_lines = [e for e in compile_errors if e.startswith("CS")]
-                    # CS0105 is "using directive appeared previously": EPLAN
-                    # pre-imports the namespaces every generated script also
-                    # declares, so it fires on almost every script and is
-                    # never the reason one failed. Keep it in compile_errors,
-                    # but don't let it crowd out the real error.
-                    summary = " | ".join(
-                        [e for e in cs_lines if not e.startswith("CS0105")]
-                        or cs_lines
-                        or compile_errors
-                    )
+                    summary = summarise_compile_errors(compile_errors)
                     # Once the compiler is confirmed as the cause, `message`
                     # stops saying "timeout". It is the first thing a reader
                     # sees, and leaving it blaming a timeout EPLAN never had
