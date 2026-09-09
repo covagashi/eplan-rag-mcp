@@ -322,6 +322,13 @@ from .discovery import (
     list_enums,
 )
 
+# API introspection - what the loaded object model actually declares. Same
+# reflection technique as live.py, but metadata only: no project, no LockingStep.
+from .introspect import (
+    api_types,
+    api_describe,
+)
+
 # Live DataModel (read/edit the project open in EPLAN, via runtime reflection)
 from .live import (
     live_query_functions,
@@ -481,6 +488,8 @@ __all__ = [
     # Discovery
     'settings_list_children', 'list_schemes', 'list_report_templates',
     'list_layers', 'list_enums',
+    # API introspection
+    'api_types', 'api_describe',
     # Live DataModel
     'live_query_functions', 'live_query_pages', 'live_set_function_text',
     'live_set_connection_designations', 'live_read_check_messages',

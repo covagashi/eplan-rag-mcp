@@ -26,12 +26,12 @@ Use one of these whenever you are unsure of an exact action name or parameter �
 
 ## 2. The local `eplan` action server
 
-It exposes **215 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
+It exposes **217 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
 
 - **8 connection/utility tools**: `eplan_versions`, `eplan_servers`,
   `eplan_connect`, `eplan_status`, `eplan_ping`, `eplan_test`,
   `eplan_disconnect`, `eplan_list_extensions`.
-- **198 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
+- **200 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
   Includes 5 discovery tools (`eplan_settings_list_children`,
   `eplan_list_schemes`, `eplan_list_report_templates`, `eplan_list_layers`,
   `eplan_list_enums`) that enumerate real EPLAN catalogs instead of guessing,
@@ -42,7 +42,17 @@ It exposes **215 tools** (full tool-by-tool reference: [the project wiki](https:
   object model via runtime reflection (see §4 below) - the last of these reaches
   a different namespace still (`Eplan.EplApi.EServices.PrjMessagesCollection`,
   the itemized "Message management" results a check run produces, which
-  `eplan_get_system_messages` cannot see), 11 schematic-authoring
+  `eplan_get_system_messages` cannot see), 2 API-introspection tools
+  (`eplan_api_types`, `eplan_api_describe`) that ask the loaded object model
+  what it declares - namespaces, types, member signatures, property
+  read/write access and enum numeric values - using the same reflection but
+  no project and no LockingStep, since they read metadata rather than data.
+  They exist because the CS0234 block is compile-time only: all 26
+  `Eplan.EplApi.*` namespaces / 606 public types are reachable at runtime, so
+  writing against this API means looking members up constantly, and the
+  alternative was a hand-written throwaway script per question. Deliberately
+  2 tools and not a wrapper per class - same call as the action catalog
+  below, for the same reason. 11 schematic-authoring
   tools on that same reflection scaffold (`eplan_live_symbol_catalog`,
   `eplan_live_create_page`, `eplan_live_place_symbol`,
   `eplan_live_connect_pins`, `eplan_live_read_page`,
