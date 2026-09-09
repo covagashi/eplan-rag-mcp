@@ -157,9 +157,9 @@ def _preserve_failed_script(script_path: str):
 _collecting_diagnostics = False
 
 
-def count_script_mentions(script_path: str) -> int:
+def count_script_mentions(script_path: str, min_level: str = "Error") -> int:
     """
-    How many entries in EPLAN's error tree currently mention this script file.
+    How many entries in EPLAN's message tree currently mention this script file.
 
     Snapshot this BEFORE running a caller-supplied script so that only the
     entries added afterwards get attributed to that run. A generated script is
@@ -167,13 +167,16 @@ def count_script_mentions(script_path: str) -> int:
     `execute_script` is not: running the same file twice would otherwise make
     the first run's compile errors look like the second run's, and a fixed
     script would keep reporting the error it no longer has.
+
+    `min_level` must match whatever the paired _compile_errors_for call uses, or
+    the counts refer to different sets and the skip is meaningless.
     """
     global _collecting_diagnostics
     if _collecting_diagnostics:
         return 0
     _collecting_diagnostics = True
     try:
-        res = get_system_messages(min_level="Error", max_messages=200)
+        res = get_system_messages(min_level=min_level, max_messages=200)
         if not res.get("success"):
             return 0
         basename = os.path.basename(script_path)
@@ -203,7 +206,8 @@ def summarise_compile_errors(compile_errors: list) -> str:
     )
 
 
-def _compile_errors_for(script_path: str, skip_matches: int = 0) -> list:
+def _compile_errors_for(script_path: str, skip_matches: int = 0,
+                        min_level: str = "Error") -> list:
     """
     Ask EPLAN why a script produced no result file.
 
@@ -221,13 +225,19 @@ def _compile_errors_for(script_path: str, skip_matches: int = 0) -> list:
     `skip_matches` ignores that many leading mentions of the file, so a caller
     that snapshotted count_script_mentions() before the run sees only what this
     run added. Generated scripts carry a per-execution uuid and so leave it 0.
+
+    `min_level` widens the read past errors. register_script uses "Warning",
+    because EPLAN's "the script contains no attributes for loading" complaint is
+    a registration failure whose severity has not been confirmed - reading only
+    Errors would miss it if EPLAN logs it as a Warning. Whatever a caller passes
+    here must match its count_script_mentions() snapshot.
     """
     global _collecting_diagnostics
     if _collecting_diagnostics:
         return []
     _collecting_diagnostics = True
     try:
-        res = get_system_messages(min_level="Error", max_messages=200)
+        res = get_system_messages(min_level=min_level, max_messages=200)
         if not res.get("success"):
             return []
         # The generated file name carries a per-execution uuid, so matching on

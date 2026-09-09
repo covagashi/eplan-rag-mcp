@@ -1,9 +1,10 @@
-# Live expectations: execute_script and EPLAN's compile diagnostics
+# Live expectations: execute_script / register_script and EPLAN's diagnostics
 
 What EPLAN actually reports when a script handed to `ExecuteScript` fails to
-compile. The offline suite pins our parsing of that report; this pins the report
-itself, which is EPLAN's format and not ours — so a release that changes it, or
-a differently localised install, breaks the fix while every offline test stays
+compile, or one handed to `RegisterScript` has nothing to register. The offline
+suite pins our parsing of those reports; this pins the reports themselves, which
+are EPLAN's format and not ours — so a release that changes them, or a
+differently localised install, breaks the fix while every offline test stays
 green.
 
 **Status: NOT YET MEASURED.** The automated half
@@ -61,6 +62,13 @@ connected MCP server is running the *installed* code, not your working tree.
 | 3 | same, inspect `compile_errors` | the block EPLAN logged, oldest first | |
 | 4 | same, inspect `message` | starts `Script did not compile:`, carries the CS number | |
 | 5 | fix `broken.cs`, run again | `success=true` — the previous run's errors are NOT re-attributed | |
+| 6 | `register_script(start_only.cs)` | `success=false`, `errorType="McpScriptRegisterFailed"`, block names the file, **no CS number** | |
+| 7 | `register_script(broken.cs)` | `success=false`, `errorType="McpScriptCompileError"`, CS0246 present | |
+
+**Record the exact no-attributes text from row 6.** It is the one string in this
+whole area nobody has captured verbatim, and two things depend on it: that EPLAN
+names the script file in it (otherwise the complaint cannot be attributed and
+`register_script` is silently blind again), and its severity — see below.
 
 ## Numbers and shapes a future change must not silently alter
 
@@ -76,9 +84,29 @@ connected MCP server is running the *installed* code, not your working tree.
   - **The header and footer are localised; the `CS####` codes are not.** Match
     on the filename and the CS number, never on the prose.
 
-- **Severity.** The tree is read at `min_level="Error"`. If EPLAN ever logs
-  compile diagnostics as warnings, the read returns nothing and every broken
-  script silently reports success again. Worth re-checking per release.
+- **Severity, and why the two tools read the tree differently.**
+  `execute_script` reads at `min_level="Error"`; `register_script` reads at
+  `"Warning"`. That is not a style difference — the severity EPLAN assigns to
+  the no-attributes complaint has **never been confirmed**, and reading only
+  Errors would miss it entirely if it is logged as a Warning. The cost of the
+  wider read is that an unrelated warning naming the same file would be
+  reported too.
+  - **When row 6 is measured, record the level** and narrow `register_script`
+    to `"Error"` if that is what EPLAN uses. Until then the wide read is the
+    safe direction: a false positive is visible and annoying, a false negative
+    is the bug being fixed.
+  - Likewise, if EPLAN ever logs *compile* diagnostics as warnings,
+    `execute_script`'s Error-only read returns nothing and every broken script
+    silently reports success again. Worth re-checking per release.
+  - Whatever level a caller uses, `count_script_mentions` must use the same
+    one: the snapshot and the read would otherwise count different sets and the
+    skip would be meaningless.
+
+- **Classification is structural, not textual.** `McpScriptCompileError` vs
+  `McpScriptRegisterFailed` is decided by whether the block contains a line
+  starting `CS`. Nothing matches EPLAN's prose, in any language. If a future
+  release stops prefixing diagnostics with the CS code, both collapse into one
+  and the distinction is lost silently — that is the thing to watch.
 
 - **Attribution across runs.** A caller-supplied basename is reused; a generated
   `script_<uuid>.cs` is not. `execute_script` therefore snapshots
@@ -99,8 +127,13 @@ does nothing still returns success. Test 1 asserts a marker file to catch that
 case for its own script, which is as far as a generic tool can go — if you need
 the outcome of your script, have it write a file and read that yourself.
 
-Also uncovered: `register_script` has the same structural blind spot
-(EPLAN complains "The script does not contain attributes for loading" in its own
-UI while the remote call returns success in ~0.45s — see the comment in
-`scripted._execute_script`). Not fixed here; noted so it is not mistaken for
-covered ground.
+For `register_script`, `success=True` means "EPLAN logged nothing against this
+file at Warning level or above". It is **not** proof the hooks are live —
+nothing here calls a `[DeclareAction]` to confirm one actually fires. Rows 6 and
+7 prove the failures are caught; proving a *successful* registration really
+registered something would need a script that declares an action, plus a call to
+it, and is not attempted.
+
+Still uncovered anywhere: whether an `UnregisterScript` of a path that was never
+registered is a no-op or an error. `unregister_script` reports whatever the
+action says and adds no diagnosis of its own.

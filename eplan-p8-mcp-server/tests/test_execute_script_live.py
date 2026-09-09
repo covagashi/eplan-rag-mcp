@@ -29,7 +29,7 @@ import os
 
 import pytest
 
-from api.actions import execute_script
+from api.actions import execute_script, register_script, unregister_script
 from api.actions._base import _get_connected_manager
 
 
@@ -161,3 +161,48 @@ def test_a_fixed_script_stops_being_reported_as_broken(tmp_path):
     assert result["success"] is True, \
         "the previous run's compile errors are still being attributed to this one"
     assert os.path.exists(marker)
+
+
+# ---------------------------------------------------------------------------
+# register_script: the second failure mode, which has no offline equivalent.
+# EPLAN's "no attributes for loading" complaint is real prose from a real
+# install; the offline suite can only assert we classify a block we invented.
+# ---------------------------------------------------------------------------
+
+@requires_eplan
+def test_registering_a_start_only_script_is_reported_as_refused(tmp_path):
+    """A [Start]-only script has nothing to register, and EPLAN says so.
+
+    This is THE case that went unnoticed for a long time: RegisterScript
+    returned success in ~0.45s while EPLAN complained in its own UI. If this
+    test fails, either EPLAN stopped complaining or it stopped naming the file
+    in the complaint - and in the latter case the tool is silently blind again.
+    """
+    marker = os.path.join(str(tmp_path), "reg.txt")
+    script = _write(tmp_path, "mcp_live_startonly.cs", GOOD_SCRIPT % marker)
+
+    result = register_script(script)
+
+    assert result["success"] is False, \
+        "a script with no loadable attributes must not register 'successfully'"
+    assert result["errorType"] == "McpScriptRegisterFailed", result
+    # It compiled - calling it a compile error would send the reader hunting
+    # for a syntax error that is not there.
+    blob = " ".join(result.get("compile_errors") or [])
+    assert "CS" not in blob, result
+    assert os.path.basename(script) in blob, \
+        "the complaint must be attributable to THIS script file"
+
+    # Leave nothing behind even though nothing should have registered.
+    unregister_script(script)
+
+
+@requires_eplan
+def test_registering_a_script_that_does_not_compile_is_a_compile_error(tmp_path):
+    script = _write(tmp_path, "mcp_live_regbroken.cs", BAD_SCRIPT)
+
+    result = register_script(script)
+
+    assert result["success"] is False
+    assert result["errorType"] == "McpScriptCompileError", result
+    assert "CS0246" in " ".join(result.get("compile_errors") or [])
