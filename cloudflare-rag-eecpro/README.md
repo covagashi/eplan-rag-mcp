@@ -1,5 +1,7 @@
 # EPLAN EEC Pro Documentation RAG — Cloudflare MCP Server
 
+*Part of the [EPLAN AI Automation Toolkit](../README.md).*
+
 Remote MCP server that lets Claude search the **EPLAN EEC Pro 2026** documentation through semantic vector search.
 
 Deployed on Cloudflare Workers with Vectorize + Workers AI.

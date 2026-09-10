@@ -1,5 +1,7 @@
 # EPLAN 2027 API Wiki — Cloudflare MCP Server (Keyword Search)
 
+*Part of the [EPLAN AI Automation Toolkit](../README.md).*
+
 Remote MCP server that lets Claude search the **EPLAN 2027 API documentation** through
 full-text/keyword search (SQLite FTS5 + bm25), over the wiki produced by
 [`eplan_wiki_scraper.py`](https://github.com/covagashi/scrapping_eplan/blob/main/eplan_wiki_scraper.py)
