@@ -132,8 +132,7 @@ introspection (2025.0.3):
 - Do **not** put `using Eplan.EplApi.DataModel;` / `...DataModel.E3D;` /
   `...HEServices;` in the script source. That is the exact CS0234 trap, and a
   script that fails to compile never runs — it never reaches the line that
-  writes a result file. If the host driving the script (any runner, not just
-  the MCP one) works by polling for that file, a compile error looks
+  writes a result file. If the host driving the script works by polling for that file, a compile error looks
   **identical to a hang**: you get a plain timeout, not a compiler message, on
   the caller side. **Before spending time on RAM/size/locking theories for a
   timed-out script, check EPLAN's own message tree first** (`SysMessagesCollection`,
@@ -150,7 +149,8 @@ introspection (2025.0.3):
   dictionary member entries as separate `x["k"] = v;` statements.**
 - **Escape Windows paths before embedding them in the generated C#**: a raw
   `"D:\x\A-B..."` collapses `\d`, `\A`, `\1` into invalid escape sequences
-  (CS1009). Emit `\\` for every backslash (the MCP `cs_escape` does this).
+  (CS1009). Emit `\\` for every backslash. If your runner has an escaping helper, use it;
+  if not, write one, because this bites every generated script.
 - Guard the `LockingStep` lifetime: construct before touching the project,
   `Dispose()` in `finally`. A project opened in the GUI and also accessed
   headless through this path coexists fine on EPLAN 2025.

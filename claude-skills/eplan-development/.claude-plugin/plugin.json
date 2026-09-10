@@ -1,7 +1,7 @@
 {
   "name": "eplan-development",
-  "description": "Develop with EPLAN Electric P8: C# scripting (actions, events, ribbon), EPLAN API (parts database, properties), and Remote Client automation (headless EPLAN, Cogineer). Includes verified action parameters and production pitfalls (command blocking, dispose discipline, EPLAN 2025 remoting changes). Covers EPLAN 2022-2025.",
-  "version": "1.0.0",
+  "description": "Develop with EPLAN Electric P8: C# scripting (actions, events, ribbon, context menus), the EPLAN API (parts database, properties, 3D installation spaces), and Remote Client automation (headless EPLAN, Cogineer). Includes verified action parameters and the production pitfalls that actually bite. Covers EPLAN 2022-2027.",
+  "version": "1.1.0",
   "author": {
     "name": "covagashi",
     "url": "https://github.com/covagashi"

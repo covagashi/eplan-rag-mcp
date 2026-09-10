@@ -68,22 +68,24 @@ run live (`PrjMessagesCollection`) — NOT the store
 `get_system_messages`/`SysMessagesCollection` reads. See "Reading check-run
 messages" below.
 
-### `execute_custom_script`: what the wrapper already injects
+### Script-runner wrappers: what is already injected
 
-The MCP `eplan_execute_custom_script` wrapper prepends exactly three usings:
-`System`, `Eplan.EplApi.Base`, `Eplan.EplApi.Scripting`. Repeating them is a
-harmless **CS0105** warning. Everything else you use — `System.IO`,
+Most hosts that run an ad-hoc script (an MCP server, a Remote Client helper,
+your own generator) wrap your code in a template and prepend a few usings. The
+one measured here prepends exactly three: `System`, `Eplan.EplApi.Base`,
+`Eplan.EplApi.Scripting`. Repeating an injected using is a harmless **CS0105**
+warning. Everything else you use — `System.IO`,
 `System.Text`, `System.Reflection`, `System.Collections.Generic` — you must
 declare yourself, or you get a wall of CS0246/CS0103. Declaring all of them and
 eating the three CS0105 warnings is the safe default.
 
-That tool now **reports compile errors properly** (`errorType:
-"McpScriptNoResult"` with a `compile_errors` list carrying file, line, column
-and CS#### text, plus `failedScriptPath`) — verified 2026-09-09. The older
-failure mode, where a bad `using` surfaced only as `"Timeout waiting for script
-results"`, is fixed on that path. A slow compile can still exceed the
-foreground timeout and land as a background task; the diagnostics then arrive
-with the task notification.
+**Check whether your runner surfaces compile errors at all.** A wrapper that
+polls for a result file cannot tell "failed to compile" from "still running",
+so a bad `using` arrives as a plain timeout with no compiler text — see
+`pitfalls.md` #9. A good one parses EPLAN's message tree and returns the
+`CS####` line with file, line and column. If yours doesn't, read the message
+tree yourself before theorising about hangs. (A slow compile can also exceed a
+foreground timeout legitimately; the diagnostics then arrive late, not never.)
 
 Incidentally `Eplan.EplApi.Scripting.StartAttribute` does **not** exist as a
 type name even though `[Start]` resolves — use

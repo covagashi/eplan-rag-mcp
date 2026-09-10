@@ -1,6 +1,6 @@
 # Executing Actions
 
-Actions are EPLAN's command surface — nearly everything the UI does is an action. If you're unsure of a name or parameter, **query the RAG first** — action names/parameters are exact identifiers, so try `POST https://rag2027.covaga.xyz/search` (keyword/FTS5) before `rag2026.covaga.xyz` (semantic) — including "hidden actions" not in the official docs.
+Actions are EPLAN's command surface — nearly everything the UI does is an action. If you're unsure of a name or parameter, **look it up first** — action names and parameters are exact, case-sensitive identifiers, and plenty of "hidden" actions never reach the official docs. Enumerating them from a running EPLAN is the most reliable answer; a keyword/full-text docs search is the next best, and a semantic one only when you don't know the vocabulary. See the lookup order in `SKILL.md`.
 
 ## Basic execution
 

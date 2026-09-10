@@ -29,34 +29,43 @@ Comprehensive guide for developing with EPLAN Electric P8: scripting (C#), the E
 - **`references/pitfalls.md`** — CRITICAL: the command-blocking issue (message loop / monitor thread), `using`/`Dispose` discipline, sequential execution model, error-handling rules, and the compile errors that masquerade as timeouts, including which C# each version's script engine actually accepts (#9).
 - **`references/integration-patterns.md`** — Connecting EPLAN to the outside: HTTP servers, SignalR real-time messaging, forwarding EPLAN system errors to external services.
 
-## When you don't know something: query the RAG
+## When you don't know something: look it up, never guess
 
-Two remote search services, indexing different doc releases with different
-search modes — **always query one before guessing** action names, parameters,
-or API signatures:
+Action names, action parameters and API signatures are exact, case-sensitive
+identifiers, and many are undocumented in the manual. **Resolve them against a
+source before writing them.** In order of preference:
 
-```bash
-# rag2027: EPLAN 2027 docs, keyword/full-text search (SQLite FTS5 + bm25).
-# Try this FIRST for anything with a real or guessable exact name -- an
-# action name, a class/method/property, an error code. Measured head-to-head
-# against rag2026 on real queries: FTS5 wins that case because it doesn't
-# fragment a page into disconnected chunks the way the embedding index does.
-curl -X POST https://rag2027.covaga.xyz/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "FindAction", "topK": 5}'
+1. **Ask EPLAN itself.** If the session can reach a running EPLAN — through an
+   MCP server, a Remote Client, or a script you can execute — introspection
+   beats any document: enumerate the registered actions and their parameters,
+   and reflect over `Eplan.EplApi.*` to confirm a member exists before calling
+   it. See `references/actions-reference.md` and `references/api-data-access.md`.
+2. **Search the EPLAN documentation** with whatever docs-search tool the host
+   provides. If there is none, two public endpoints index the EPLAN P8 help and
+   need no auth (they are one deployment of this idea, not a dependency of this
+   skill — any equivalent index works):
 
-# rag2026: EPLAN 2026 docs, semantic search (Vectorize + bge-base, ~57k
-# vectors). Use when the query shares no real vocabulary with the docs at
-# all -- e.g. describing a UI behavior without knowing what it's called.
-curl -X POST https://rag2026.covaga.xyz/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "export project to PDF parameters", "topK": 5}'
-```
+   ```bash
+   # Keyword / full-text (SQLite FTS5 + bm25), EPLAN 2027 docs.
+   # Try this FIRST for anything with a real or guessable exact name -- an
+   # action name, a class/method/property, an error code. Measured
+   # head-to-head on real queries: FTS5 wins that case, because it doesn't
+   # fragment a page into disconnected chunks the way an embedding index does.
+   curl -X POST https://rag2027.covaga.xyz/search      -H "Content-Type: application/json"      -d '{"query": "FindAction", "topK": 5}'
 
-- `POST /search` — body `{"query": "...", "topK": N}` (public, no auth) — same shape on both
-- `GET /stats` — index statistics; `GET /health` — health check — same shape on both
+   # Semantic (Vectorize + bge-base, ~57k vectors), EPLAN 2026 docs.
+   # Use when the query shares no real vocabulary with the docs at all --
+   # e.g. describing a UI behavior without knowing what it is called.
+   curl -X POST https://rag2026.covaga.xyz/search      -H "Content-Type: application/json"      -d '{"query": "export project to PDF parameters", "topK": 5}'
+   ```
 
-Use natural-language queries in English ("action to renumber devices", "PagePropertyList page type values"). Prefer several narrow queries over one broad one.
+   Both expose the same shape: `POST /search` with `{"query": "...", "topK": N}`,
+   plus `GET /stats` and `GET /health`.
+3. **The official help**, `https://www.eplan.help/`, when you need prose rather
+   than an identifier.
+
+Query in English, and prefer several narrow queries over one broad one
+("action to renumber devices", "PagePropertyList page type values").
 
 ## Golden rules (violating these causes real production failures)
 
@@ -66,7 +75,7 @@ Use natural-language queries in English ("action to renumber devices", "PageProp
 4. **Never use empty `catch {}`.** Log with `BaseException(msg, MessageLevel.X).FixMessage()` (inside EPLAN) or a logger (outside).
 5. **EPLAN 2025 remoting requires "Remote Client Access"** enabled in EPLAN options; transport is gRPC (default port 49152, dynamic). In 2023 it was on by default.
 6. **Target .NET Framework 4.8.1** for EPLAN 2025 API/RemoteClient work; reference DLLs from `C:\Program Files\EPLAN\Platform\<version>\Bin\`.
-7. **Verify action names/parameters against the RAG** — many are undocumented and case-sensitive.
+7. **Verify action names/parameters before use** — many are undocumented and all are case-sensitive. Ask a live EPLAN, or search the docs; never write one from memory.
 8. **Never `using Eplan.EplApi.DataModel;`/`...HEServices;` in a script** — that statement doesn't compile in EPLAN's script engine (CS0234, a fixed assembly set). Reach that object model via runtime reflection instead, and never hardcode the assembly name: on 2027 the managed assemblies are `...DataModelNetu`/`HEServicesNetu` and the un-suffixed names are the mixed-mode *native* twins, so a hardcoded old name throws `BadImageFormatException` there — but this is **not** a clean version cutoff: measured on 2025.0.3 the loaded managed assembly *is* `Eplan.EplApi.DataModelu` and nothing refuses to load. Resolve the type by scanning `AppDomain.CurrentDomain.GetAssemblies()` first, and only then try candidate names. See `references/e3d-installation-spaces.md`.
 9. **Never `RegisterScript` a one-shot `[Start]` script.** That's for installing persistent hooks (`[DeclareAction]`/`[DeclareEventHandler]`/`[DeclareRegister]`); a `[Start]`-only script has none, so registering it first just produces a spurious EPLAN warning and wastes two remote-API round-trips. Call `ExecuteScript` alone. See `references/pitfalls.md` #10.
 10. **Write generated scripts to the oldest C# your fleet needs — on 2026 that is C# 5: no `?.`, no `$"..."`, no `{ ["k"] = v }`, no `nameof`.** A compile error is *silent*: `ExecuteScript` returns success, the script never runs, and a caller waiting on its output just sees a timeout — so it gets misread as a hung or blocked EPLAN. **On any script timeout, read EPLAN's system-message tree for the `CS####` line before suspecting anything else.** (2027's engine accepts more than 2026's, so probe rather than assume either way.) See `references/pitfalls.md` #9.

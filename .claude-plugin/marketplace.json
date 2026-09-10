@@ -12,8 +12,8 @@
     {
       "name": "eplan-development",
       "source": "./claude-skills/eplan-development",
-      "description": "Teach Claude to develop with EPLAN Electric P8: C# scripting, EPLAN API (parts database), Remote Client automation, verified action parameters, and production pitfalls. Covers EPLAN 2022-2025.",
-      "version": "1.0.0",
+      "description": "Teach Claude to develop with EPLAN Electric P8: C# scripting, EPLAN API (parts database, 3D), Remote Client automation, verified action parameters, and production pitfalls. Covers EPLAN 2022-2027. Mirror of covagashi/eplan-development-skill.",
+      "version": "1.1.0",
       "author": {
         "name": "covagashi",
         "url": "https://github.com/covagashi"
