@@ -136,7 +136,62 @@ public void UnRegister()
     if (tab != null) tab.Remove();
 }
 ```
-`TAB_NAME` is a `MultiLangString`. There is also `ContextMenu`/`ContextMenuLocation` for right-click menus.
+`TAB_NAME` is a `MultiLangString`.
+
+### Context menus
+
+A right-click entry needs `[DeclareAction]` **plus** `[DeclareMenu]`, and the script must be
+installed with `RegisterScript` — a `[Start]` method registers nothing.
+
+```csharp
+[DeclareAction("MyAction")]
+public void OnClick() { MessageBox.Show("it works"); }
+
+[DeclareMenu]
+public void BuildMenu()
+{
+    // Fully qualify: ContextMenu is ambiguous with System.Windows.Forms.ContextMenu (CS0104).
+    var loc  = new Eplan.EplApi.Gui.ContextMenuLocation("XPamDtTabSheetDialog", "1042");
+    var menu = new Eplan.EplApi.Gui.ContextMenu();
+    menu.AddMenuItem(loc, "it works", "MyAction", /*sepBefore*/ true, /*sepAfter*/ false);
+}
+```
+
+**Finding the two location strings** — undocumented, and the only hard part. Turn on:
+
+```
+USER.EnfMVC.ContextMenuSetting.ShowIdentifier = true   // labels each menu "<DialogName>.<CtxId>"
+USER.EnfMVC.ContextMenuSetting.ShowExtended   = true   // makes the label clickable -> copyable dialog
+```
+
+Right-click where the entry should go and EPLAN appends e.g. `XPamDtTabSheetDialog.1042`
+to the menu itself. The id is simply the **Win32 control id** of the control under the
+cursor, so it can also be read from a focus-chain dump.
+
+Gotchas:
+- `AddMenuItem` does **not** validate the location: a bogus dialog/id pair still returns
+  `true`. The bool means "this item was new", not "the target exists" — only a visual
+  check proves placement.
+- `UnregisterScript` stops the action but leaves already-inserted items in place; use
+  `RemoveMenuItem` or restart EPLAN.
+- The script host references very little. `System`, `System.Windows.Forms`,
+  `Eplan.EplApi.Scripting`, `ApplicationFramework`, `Base` and `Gui` are pre-injected
+  (repeating them is CS0105), but `DataModel` and `HEServices` are **not referenced at
+  all** (CS0234) — reach them by reflection.
+
+**The action receives no context.** `ActionCallingContext.GetContextParameter()` is `null`,
+so nothing tells the action which row or cell was clicked. EPLAN's grids are custom-drawn
+`BCGPGridCtrl` with no window text, so `WM_GETTEXT` reads nothing either. What does work is
+MSAA: `AccessibleObjectFromWindow(GetFocus(), OBJID_CLIENT, IID_IAccessible)` yields a
+`GridControl` with one child per row (`accName` = "Row 5", `accValue` = the row's cells
+joined with ", "). `accFocus` throws on that grid — scan children for the
+`STATE_SYSTEM_FOCUSED` (0x4) bit instead. Two interop traps: the `out object` parameter
+needs `[MarshalAs(UnmanagedType.IUnknown)]` (else `InvalidOleVariantTypeException`), and
+late-bound IDispatch calls want `accName`, not `get_accName` (else COMException).
+
+This reads the screen, not the data model: it reflects uncommitted grid edits, but it
+depends on the control's accessibility and on column order. Prefer a self-describing
+property grid (rows labelled `Name <id>`) over a positional one where possible.
 
 ## System messages
 
