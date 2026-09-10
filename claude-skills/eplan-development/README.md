@@ -1,5 +1,11 @@
 # eplan-development — Claude Code Skill
 
+> **This is a mirror.** The canonical, host-agnostic copy lives in its own repo:
+> **[covagashi/eplan-development-skill](https://github.com/covagashi/eplan-development-skill)**
+> — install it with `/plugin marketplace add covagashi/eplan-development-skill`
+> and `/plugin install eplan-development@eplan-skills`. Use that one if you don't
+> run the MCP server; it assumes no runner and no particular docs index.
+
 A Claude Code **skill** for developing with EPLAN Electric P8: C# scripting, the EPLAN API (parts database, properties), and Remote Client automation (including headless EPLAN and Cogineer). Distilled from working production code, with the pitfalls that actually bite (command blocking, message loop, dispose discipline, EPLAN 2025 remoting changes).
 
 When installed, Claude automatically loads this knowledge whenever you ask it to write EPLAN scripts, call EPLAN actions, access the parts database, or build apps that drive EPLAN remotely. It also instructs Claude to verify action names and parameters against the [EPLAN P8 docs RAG](../../cloudflare-rag-eplan-p8/) instead of guessing.

@@ -27,7 +27,7 @@ The repo contains three independent sub-projects: a local MCP server that drives
 ├── cloudflare-rag-eplan-p8/      # REMOTE: Cloudflare Worker that serves the P8 docs RAG over MCP
 ├── cloudflare-rag-eecpro/        # REMOTE: Cloudflare Worker that serves the EEC Pro docs RAG over MCP
 ├── cloudflare-rag-eplan-2027/    # REMOTE: Cloudflare Worker that serves the 2027 API wiki (D1/FTS5 keyword search)
-└── claude-skills/                # SKILL: Claude Code skill for EPLAN P8 development
+└── claude-skills/                # SKILL: Claude Code skill for EPLAN P8 development (mirror of covagashi/eplan-development-skill)
 ```
 
 | Folder | Type | Purpose | EPLAN product |
@@ -36,7 +36,7 @@ The repo contains three independent sub-projects: a local MCP server that drives
 | `cloudflare-rag-eplan-p8/` | Remote Cloudflare Worker | Serve the P8 doc index as a remote MCP + REST API | EPLAN Electric P8 |
 | `cloudflare-rag-eecpro/` | Remote Cloudflare Worker | Serve the EEC Pro doc index as a remote MCP + REST API | EPLAN EEC Pro 2026 |
 | `cloudflare-rag-eplan-2027/` | Remote Cloudflare Worker | Serve the 2027 API wiki as a remote MCP; D1 + FTS5 keyword search, complementary to the semantic index above | EPLAN Electric P8 2027 |
-| `claude-skills/eplan-development/` | Claude Code skill | Teach Claude to write correct EPLAN scripts, API code, and Remote Client apps (patterns + pitfalls) | EPLAN Electric P8 |
+| `claude-skills/eplan-development/` | Claude Code skill | Teach Claude to write correct EPLAN scripts, API code, and Remote Client apps (patterns + pitfalls). Mirror of the standalone [eplan-development-skill](https://github.com/covagashi/eplan-development-skill) repo | EPLAN Electric P8 |
 
 Each sub-project has its own README with installation and usage details.
 
@@ -146,7 +146,16 @@ See [`cloudflare-rag-eplan-p8/README.md`](cloudflare-rag-eplan-p8/README.md) and
 
 While the MCP servers let Claude *act* on EPLAN, the skill teaches Claude to *write correct EPLAN code*: scripting entry points, verified action parameters, parts-database access, Remote Client automation (dynamic ports, headless EPLAN, Cogineer), and the production pitfalls (pseudo-async command blocking, message-loop monitor thread, dispose discipline, EPLAN 2025 remoting changes).
 
-Install from Claude Code (this repo is also a plugin marketplace):
+**The skill now has its own home: [covagashi/eplan-development-skill](https://github.com/covagashi/eplan-development-skill).** It is deliberately host-agnostic — it assumes no MCP server, no runner and no particular docs RAG — so it is useful on its own, whether or not you run anything else in this repo. That repo is the canonical copy; `claude-skills/` here mirrors it.
+
+Install the standalone skill:
+
+```
+/plugin marketplace add covagashi/eplan-development-skill
+/plugin install eplan-development@eplan-skills
+```
+
+Or install it from this repo, which is also a plugin marketplace:
 
 ```
 /plugin marketplace add covagashi/eplan-rag-mcp
@@ -300,7 +309,7 @@ Notes:
 ├── cloudflare-rag-eplan-p8/      # 远程：通过 MCP 提供 P8 文档 RAG 的 Cloudflare Worker
 ├── cloudflare-rag-eecpro/        # 远程：通过 MCP 提供 EEC Pro 文档 RAG 的 Cloudflare Worker
 ├── cloudflare-rag-eplan-2027/    # 远程：通过 MCP 提供 2027 API 维基的 Cloudflare Worker（D1/FTS5 关键词检索）
-└── claude-skills/                # 技能：用于 EPLAN P8 开发的 Claude Code Skill
+└── claude-skills/                # 技能：用于 EPLAN P8 开发的 Claude Code Skill（covagashi/eplan-development-skill 的镜像）
 ```
 
 | 目录 | 类型 | 用途 | 适用的 EPLAN 产品 |
@@ -309,7 +318,7 @@ Notes:
 | `cloudflare-rag-eplan-p8/` | 远程 Cloudflare Worker | 以远程 MCP + REST API 的形式提供 P8 文档索引 | EPLAN Electric P8 |
 | `cloudflare-rag-eecpro/` | 远程 Cloudflare Worker | 以远程 MCP + REST API 的形式提供 EEC Pro 文档索引 | EPLAN EEC Pro 2026 |
 | `cloudflare-rag-eplan-2027/` | 远程 Cloudflare Worker | 以远程 MCP 的形式提供 2027 API 维基；使用 D1 + FTS5 关键词检索，与上面的语义索引互补 | EPLAN Electric P8 2027 |
-| `claude-skills/eplan-development/` | Claude Code Skill | 教 Claude 写出正确的 EPLAN 脚本、API 代码和 Remote Client 应用（模式与陷阱） | EPLAN Electric P8 |
+| `claude-skills/eplan-development/` | Claude Code Skill | 教 Claude 写出正确的 EPLAN 脚本、API 代码和 Remote Client 应用（模式与陷阱）；独立仓库 [eplan-development-skill](https://github.com/covagashi/eplan-development-skill) 的镜像 | EPLAN Electric P8 |
 
 每个子项目都有各自的 README，其中包含安装和使用的详细说明。
 
@@ -395,7 +404,16 @@ curl -X POST https://rag2026.covaga.xyz/search -H "Content-Type: application/jso
 
 如果说 MCP 服务器让 Claude 能够对 EPLAN *执行操作*，那么这个 Skill 则教会 Claude *写出正确的 EPLAN 代码*：脚本入口点、经过验证的操作参数、部件数据库访问、Remote Client 自动化（动态端口、无界面 EPLAN、Cogineer），以及生产环境中的各种陷阱（伪异步命令阻塞、消息循环监视线程、dispose 规范、EPLAN 2025 remoting 的变化）。
 
-从 Claude Code 中安装（本仓库同时也是一个插件市场）：
+**该 Skill 现已拥有独立仓库：[covagashi/eplan-development-skill](https://github.com/covagashi/eplan-development-skill)。** 它刻意做到与宿主无关——不假定任何 MCP 服务器、脚本执行器或特定的文档 RAG——因此无论你是否使用本仓库的其他部分，它都可以单独使用。该仓库为权威副本，本仓库的 `claude-skills/` 只是其镜像。
+
+安装独立版 Skill：
+
+```
+/plugin marketplace add covagashi/eplan-development-skill
+/plugin install eplan-development@eplan-skills
+```
+
+也可以从本仓库安装（本仓库同时也是一个插件市场）：
 
 ```
 /plugin marketplace add covagashi/eplan-rag-mcp
