@@ -38,6 +38,7 @@ ALL_TOOLS = [
     (live.live_set_function_text, {"name": "+X-K1", "text": "hi"}),
     (live.live_set_connection_designations,
      {"name": "+X-K1", "designations": ["Y11", "Y12"]}),
+    (live.live_read_check_messages, {}),
 ]
 
 
@@ -316,3 +317,66 @@ def test_conn_designations_escapes_injection(capture):
     cs = capture["script"]
     assert _string_literals_balanced(cs)
     assert '"' + INJECTION not in cs
+
+
+# ---------------------------------------------------------------------------
+# live_read_check_messages - PrjMessagesCollection (Eplan.EplApi.EServices),
+# the itemized store behind the "Message management" dialog. Reached the same
+# way DataModel/HEServices are: never `using`, always FindType + reflection.
+# ---------------------------------------------------------------------------
+
+def test_read_check_messages_no_eservices_using_directive(capture):
+    # EServices is a third namespace in the same CS0234 family as
+    # DataModel/HEServices - must never appear as a `using` directive either.
+    live.live_read_check_messages()
+    for line in capture["script"].splitlines():
+        if line.strip().startswith("using "):
+            assert "Eplan.EplApi.EServices" not in line
+
+
+def test_read_check_messages_resolves_collection_by_reflection(capture):
+    live.live_read_check_messages()
+    cs = capture["script"]
+    assert 'FindType("Eplan.EplApi.EServices.PrjMessagesCollection")' in cs
+    assert 'collType.GetMethod("GetPrjMsgEnumerator")' in cs
+    assert 'itType.GetProperty("CurrentProjectMessage")' in cs
+
+
+def test_read_check_messages_default_window(capture):
+    live.live_read_check_messages()
+    cs = capture["script"]
+    assert "int startIdx = 1;" in cs
+    assert "int endIdx = 50;" in cs
+
+
+def test_read_check_messages_start_index_and_limit_set_the_window(capture):
+    live.live_read_check_messages(start_index=1940, limit=1)
+    cs = capture["script"]
+    assert "int startIdx = 1940;" in cs
+    assert "int endIdx = 1940;" in cs
+
+
+def test_read_check_messages_limit_is_capped_at_500(capture):
+    live.live_read_check_messages(start_index=1, limit=999999)
+    cs = capture["script"]
+    assert "int endIdx = 500;" in cs
+
+
+def test_read_check_messages_rejects_start_index_below_one(capture):
+    result = live.live_read_check_messages(start_index=0)
+    assert result["success"] is False
+    assert "script" not in capture
+
+
+def test_read_check_messages_contains_stays_in_literal(capture):
+    live.live_read_check_messages(contains=INJECTION)
+    cs = capture["script"]
+    assert _string_literals_balanced(cs)
+    assert '"' + INJECTION not in cs
+
+
+def test_read_check_messages_default_contains_is_empty_string(capture):
+    # Matches() treats an empty filter as "match everything" - confirm that is
+    # what an omitted `contains` actually compiles to, not the string "None".
+    live.live_read_check_messages()
+    assert 'string filterText = "";' in capture["script"]

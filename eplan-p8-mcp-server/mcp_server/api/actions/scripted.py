@@ -157,7 +157,132 @@ def _preserve_failed_script(script_path: str):
 _collecting_diagnostics = False
 
 
-def _compile_errors_for(script_path: str) -> list:
+def count_script_mentions(script_path: str, min_level: str = "Error") -> int:
+    """
+    How many entries in EPLAN's message tree currently mention this script file.
+
+    Snapshot this BEFORE running a caller-supplied script so that only the
+    entries added afterwards get attributed to that run. A generated script is
+    named script_<uuid>.cs and so is self-identifying, but a path handed to
+    `execute_script` is not: running the same file twice would otherwise make
+    the first run's compile errors look like the second run's, and a fixed
+    script would keep reporting the error it no longer has.
+
+    `min_level` must match whatever the paired _compile_errors_for call uses, or
+    the counts refer to different sets and the skip is meaningless.
+    """
+    global _collecting_diagnostics
+    if _collecting_diagnostics:
+        return 0
+    _collecting_diagnostics = True
+    try:
+        res = get_system_messages(min_level=min_level, max_messages=200)
+        if not res.get("success"):
+            return 0
+        basename = os.path.basename(script_path)
+        return sum(1 for m in res.get("messages") or []
+                   if basename in (m.get("text") or ""))
+    except Exception:
+        # A diagnostic must never turn a working call into a failure.
+        return 0
+    finally:
+        _collecting_diagnostics = False
+
+
+# The message tree read is windowed - get_system_messages keeps the NEWEST N.
+# 200 was too small: after a few runs the tree holds enough that a window
+# already full slides by exactly the number of entries a call adds, which is
+# what broke the first version of the diff. 1000 makes a slide rare, and
+# new_messages_since() handles it correctly when it does happen anyway.
+_DIAGNOSTIC_WINDOW = 1000
+
+
+def snapshot_message_texts(min_level: str = "Error") -> list:
+    """
+    The message tree's texts right now, oldest first - a "before" mark.
+
+    Filename matching only works when EPLAN names the file. Measured 2026-09-09
+    on 2025.0.3: the compile block does, in both its header and footer, and the
+    registration refusal does NOT - it is the bare line "En el script no hay
+    atributos disponibles para cargar." with no path in it at all. Diffing the
+    tree across a call attributes both, so it is the single mechanism used.
+
+    Returns None - NOT [] - when the tree could not be read, so a caller can
+    tell "no baseline" from "the tree was legitimately empty". Conflating those
+    two is how an empty tree, the normal state on a freshly started EPLAN, would
+    silently disable the whole diagnostic.
+    """
+    global _collecting_diagnostics
+    if _collecting_diagnostics:
+        return None
+    _collecting_diagnostics = True
+    try:
+        res = get_system_messages(min_level=min_level,
+                                  max_messages=_DIAGNOSTIC_WINDOW)
+        if not res.get("success"):
+            return None
+        return [m.get("text", "") for m in res.get("messages") or []]
+    except Exception:
+        return None
+    finally:
+        _collecting_diagnostics = False
+
+
+def new_messages_since(before, min_level: str = "Error") -> list:
+    """
+    What the tree gained since `before` was taken.
+
+    Sound only because EPLAN's actions are synchronous here: nothing else is
+    logging between the two reads, so whatever appeared belongs to the call in
+    between.
+
+    Tolerates a slid window. The read keeps only the newest N messages, so once
+    the tree is longer than N, adding K entries also drops K off the front and
+    `before` is no longer a prefix of `after` - it is a prefix of after shifted
+    by K. A first version tested only for the un-slid case and reported nothing
+    at all in a long-running session, which is exactly the case where a
+    diagnostic is most needed. So find the smallest shift that aligns them and
+    take what follows.
+
+    Returns [] when nothing is new, when `before` is None (no baseline - a
+    diagnostic must never invent a verdict), or when no shift aligns the two at
+    all. That last case means something cleared or rewrote the tree, and a
+    delta would be fiction.
+    """
+    if before is None:
+        return []
+    after = snapshot_message_texts(min_level=min_level)
+    if after is None:
+        return []
+    if not before:
+        return list(after)
+
+    for shift in range(len(before)):
+        overlap = before[shift:]
+        if after[:len(overlap)] == overlap:
+            return after[len(overlap):]
+    return []
+
+
+def summarise_compile_errors(compile_errors: list) -> str:
+    """
+    One line naming the real compile error.
+
+    CS0105 ("using directive appeared previously") fires on almost every script,
+    because EPLAN pre-imports namespaces the script also declares, and is never
+    why one failed - so it is kept in the full list but never allowed to crowd
+    out the actual error.
+    """
+    cs_lines = [e for e in compile_errors if e.startswith("CS")]
+    return " | ".join(
+        [e for e in cs_lines if not e.startswith("CS0105")]
+        or cs_lines
+        or compile_errors
+    )
+
+
+def _compile_errors_for(script_path: str, skip_matches: int = 0,
+                        min_level: str = "Error") -> list:
     """
     Ask EPLAN why a script produced no result file.
 
@@ -171,13 +296,23 @@ def _compile_errors_for(script_path: str) -> list:
     "<file> cannot be compiled" footer), oldest first - or [] if EPLAN
     logged none, which means a genuine timeout: the script compiled and is
     still running, or it died without writing its result.
+
+    `skip_matches` ignores that many leading mentions of the file, so a caller
+    that snapshotted count_script_mentions() before the run sees only what this
+    run added. Generated scripts carry a per-execution uuid and so leave it 0.
+
+    `min_level` widens the read past errors. register_script uses "Warning",
+    because EPLAN's "the script contains no attributes for loading" complaint is
+    a registration failure whose severity has not been confirmed - reading only
+    Errors would miss it if EPLAN logs it as a Warning. Whatever a caller passes
+    here must match its count_script_mentions() snapshot.
     """
     global _collecting_diagnostics
     if _collecting_diagnostics:
         return []
     _collecting_diagnostics = True
     try:
-        res = get_system_messages(min_level="Error", max_messages=200)
+        res = get_system_messages(min_level=min_level, max_messages=200)
         if not res.get("success"):
             return []
         # The generated file name carries a per-execution uuid, so matching on
@@ -185,6 +320,8 @@ def _compile_errors_for(script_path: str) -> list:
         basename = os.path.basename(script_path)
         texts = [m.get("text", "") for m in res.get("messages") or []]
         marked = [i for i, t in enumerate(texts) if basename in t]
+        if skip_matches:
+            marked = marked[skip_matches:]
         if not marked:
             return []
         return texts[marked[0]:marked[-1] + 1]
@@ -292,17 +429,7 @@ def _execute_script(script_content: str, timeout: float = 30.0) -> dict:
                 }
 
                 if compile_errors:
-                    cs_lines = [e for e in compile_errors if e.startswith("CS")]
-                    # CS0105 is "using directive appeared previously": EPLAN
-                    # pre-imports the namespaces every generated script also
-                    # declares, so it fires on almost every script and is
-                    # never the reason one failed. Keep it in compile_errors,
-                    # but don't let it crowd out the real error.
-                    summary = " | ".join(
-                        [e for e in cs_lines if not e.startswith("CS0105")]
-                        or cs_lines
-                        or compile_errors
-                    )
+                    summary = summarise_compile_errors(compile_errors)
                     # Once the compiler is confirmed as the cause, `message`
                     # stops saying "timeout". It is the first thing a reader
                     # sees, and leaving it blaming a timeout EPLAN never had

@@ -26,19 +26,33 @@ Use one of these whenever you are unsure of an exact action name or parameter �
 
 ## 2. The local `eplan` action server
 
-It exposes **214 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
+It exposes **217 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
 
 - **8 connection/utility tools**: `eplan_versions`, `eplan_servers`,
   `eplan_connect`, `eplan_status`, `eplan_ping`, `eplan_test`,
   `eplan_disconnect`, `eplan_list_extensions`.
-- **197 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
+- **200 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
   Includes 5 discovery tools (`eplan_settings_list_children`,
   `eplan_list_schemes`, `eplan_list_report_templates`, `eplan_list_layers`,
   `eplan_list_enums`) that enumerate real EPLAN catalogs instead of guessing,
-  4 live-DataModel tools (`eplan_live_query_functions`,
+  5 live-DataModel tools (`eplan_live_query_functions`,
   `eplan_live_query_pages`, `eplan_live_set_function_text`,
-  `eplan_live_set_connection_designations`) that read/edit the open project's
-  object model via runtime reflection (see §4 below), 11 schematic-authoring
+  `eplan_live_set_connection_designations`,
+  `eplan_live_read_check_messages`) that read/edit the open project's
+  object model via runtime reflection (see §4 below) - the last of these reaches
+  a different namespace still (`Eplan.EplApi.EServices.PrjMessagesCollection`,
+  the itemized "Message management" results a check run produces, which
+  `eplan_get_system_messages` cannot see), 2 API-introspection tools
+  (`eplan_api_types`, `eplan_api_describe`) that ask the loaded object model
+  what it declares - namespaces, types, member signatures, property
+  read/write access and enum numeric values - using the same reflection but
+  no project and no LockingStep, since they read metadata rather than data.
+  They exist because the CS0234 block is compile-time only: all 26
+  `Eplan.EplApi.*` namespaces / 606 public types are reachable at runtime, so
+  writing against this API means looking members up constantly, and the
+  alternative was a hand-written throwaway script per question. Deliberately
+  2 tools and not a wrapper per class - same call as the action catalog
+  below, for the same reason. 11 schematic-authoring
   tools on that same reflection scaffold (`eplan_live_symbol_catalog`,
   `eplan_live_create_page`, `eplan_live_place_symbol`,
   `eplan_live_connect_pins`, `eplan_live_read_page`,
@@ -195,8 +209,13 @@ All of these exist as `eplan_*` tools:
   filter + result limit), `eplan_live_set_function_text` (write `FUNC_TEXT`,
   defaults to one function at a time, returns the previous value),
   `eplan_live_set_connection_designations` (write the indexed
-  `FUNC_CONNECTIONDESIGNATION` property, re-reads after writing to confirm).
-  These reach `Eplan.EplApi.DataModel`/`HEServices` types via
+  `FUNC_CONNECTIONDESIGNATION` property, re-reads after writing to confirm),
+  `eplan_live_read_check_messages` (page through the itemized "Message
+  management" results of the last check run — `Eplan.EplApi.EServices.
+  PrjMessagesCollection` — by 1-based index, matching the order EPLAN's own
+  dialog lists them in; `eplan_get_system_messages` only ever sees the two
+  summary lines a check run appends, never the individual entries).
+  These reach `Eplan.EplApi.DataModel`/`HEServices`/`EServices` types via
   `AppDomain.CurrentDomain.GetAssemblies()` + `Assembly.Load` fallback instead
   of a static `using`, because that `using` doesn't compile in EPLAN's script
   engine (CS0234) and, separately, the managed assembly names changed

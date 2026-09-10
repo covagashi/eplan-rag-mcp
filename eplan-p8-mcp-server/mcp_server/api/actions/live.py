@@ -986,3 +986,139 @@ def live_set_connection_designations(name: str, designations: list, limit: int =
         _script("LiveSetConnDesignations_" + uuid.uuid4().hex[:6], body),
         timeout=timeout_seconds,
     )
+
+
+def live_read_check_messages(start_index: int = 1, limit: int = 50, contains: str = None,
+                              timeout_seconds: float = 60.0) -> dict:
+    """
+    Read itemized messages from EPLAN's "Message management" dialog (Tools >
+    Review > Messages, action XMsgManagementShowAction) - the per-item results
+    of the last check run (eplan_check_project / eplan_check_pages / ribbon
+    "Check project").
+
+    get_system_messages CANNOT see these: a check run only ever appends two
+    summary lines ("N messages appeared...") to the general system message
+    tree. The actual N itemized entries live in a separate store,
+    Eplan.EplApi.EServices.PrjMessagesCollection - "Collection of project
+    messages of the last check run" per the API docs - which is what this
+    reads.
+
+    That namespace is Eplan.EplApi.EServices, one of the ones that does NOT
+    compile with `using` inside the EPLAN script engine (CS0234 - same trap as
+    Eplan.EplApi.DataModel/HEServices, see api-data-access.md). This tool
+    reaches it the same way live_query_functions reaches DataModel: by runtime
+    reflection over the already-loaded assemblies (FindType + Activator +
+    MethodInfo.Invoke), never by referencing the namespace at compile time.
+
+    Indexing is 1-based and matches the order EPLAN's own Message management
+    dialog lists items in, so "message number 71 in the dialog" is
+    start_index=71, limit=1.
+
+    Args:
+        start_index: 1-based position of the first message to return (default
+            1). Use this to page through a large check run, or to jump
+            straight to one position to compare against what the user sees
+            on screen ("is message #1940 the same as what I see?").
+        limit: How many consecutive messages to return from start_index
+            (default 50, hard-capped at 500 - the collection can hold
+            thousands of entries and this is a read tool, not a full dump).
+        contains: Optional case-insensitive substring filter on the message
+            text. Applied together with the start_index/limit window (i.e.
+            this narrows what's returned FROM that window, it does not search
+            the whole collection) - pass a wide limit if you need to search
+            broadly. Omit to return every message in the window.
+        timeout_seconds: Max seconds to wait for the script (default 60).
+            Raise it for very large projects - the whole collection is
+            enumerated once regardless of the window requested.
+
+    Returns:
+        dict with "total" (Count of the full collection, read directly - not
+        by walking), "enumerated" (how many entries the enumerator actually
+        walked before stopping at end_index; less than total whenever the
+        window ends before the collection does), "matched" (how many
+        in-window messages passed the contains filter), and "messages": a
+        list of {"index" (1-based), "id" (message number), "text" (full
+        substituted message text), "object1Type" (.NET type name of the
+        first object the message is attached to, e.g. "Terminal", "Function",
+        or "" if none)}.
+    """
+    try:
+        start_index = int(start_index)
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return {"success": False,
+                "error": f"start_index/limit must be integers (got start_index={start_index!r}, limit={limit!r})."}
+    if start_index < 1:
+        return {"success": False, "error": "start_index is 1-based; must be >= 1."}
+    if limit < 1:
+        return {"success": False, "error": "limit must be >= 1."}
+    limit = min(limit, 500)
+    end_index = start_index + limit - 1
+
+    body = '''            Type collType = FindType("Eplan.EplApi.EServices.PrjMessagesCollection");
+            if (collType == null)
+                throw new Exception("PrjMessagesCollection type not found - the EServices assembly may not be loaded in this process.");
+            object coll = Activator.CreateInstance(collType, new object[] { project });
+
+            PropertyInfo countProp = collType.GetProperty("Count");
+            int total = countProp != null ? (int)countProp.GetValue(coll, null) : -1;
+
+            MethodInfo getEnumMethod = collType.GetMethod("GetPrjMsgEnumerator");
+            object it = getEnumMethod.Invoke(coll, null);
+            Type itType = it.GetType();
+            MethodInfo moveNext = itType.GetMethod("MoveNext");
+            PropertyInfo currentProp = itType.GetProperty("CurrentProjectMessage");
+
+            int startIdx = ''' + str(start_index) + ''';
+            int endIdx = ''' + str(end_index) + ''';
+            string filterText = "''' + cs_escape(contains or "") + '''";
+
+            List<Dictionary<string, object>> messages = new List<Dictionary<string, object>>();
+            int idx = 0;
+            int matched = 0;
+            bool has = (bool)moveNext.Invoke(it, null);
+            while (has)
+            {
+                idx++;
+                if (idx > endIdx) break;   // past the window - no need to keep walking further, but Count/total is already known
+                object msg = currentProp.GetValue(it, null);
+                if (msg != null && idx >= startIdx)
+                {
+                    Type msgType = msg.GetType();
+                    string text = "";
+                    int id = -1;
+                    string objType = "";
+                    try { text = (string)msgType.GetMethod("GetText").Invoke(msg, null); }
+                    catch (Exception iex) { text = "<GetText failed: " + Flatten(iex) + ">"; }
+                    try { id = (int)msgType.GetMethod("GetId").Invoke(msg, null); } catch { }
+                    try
+                    {
+                        object o1 = msgType.GetMethod("GetObject1").Invoke(msg, null);
+                        if (o1 != null) objType = o1.GetType().Name;
+                    }
+                    catch { }
+
+                    if (Matches(text, filterText))
+                    {
+                        matched++;
+                        Dictionary<string, object> m = new Dictionary<string, object>();
+                        m["index"] = idx;
+                        m["id"] = id;
+                        m["text"] = text;
+                        m["object1Type"] = objType;
+                        messages.Add(m);
+                    }
+                }
+                has = (bool)moveNext.Invoke(it, null);
+            }
+
+            results["success"] = true;
+            results["total"] = total;
+            results["enumerated"] = idx;
+            results["matched"] = matched;
+            results["messages"] = messages;
+'''
+    return _execute_script(
+        _script("LiveReadCheckMessages_" + uuid.uuid4().hex[:6], body),
+        timeout=timeout_seconds,
+    )

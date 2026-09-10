@@ -1,0 +1,38 @@
+{
+  "SPECIAL/DCP2OL": {
+    "status": "excluded",
+    "reason": "User visual review in EPLAN (2026-09-08): renders but is 'inutil' - has a drawing, but it's useless."
+  },
+  "SPECIAL/DCPOL": {
+    "status": "excluded",
+    "reason": "User visual review (2026-09-08): same call as DCP2OL, its non-two-sided sibling."
+  },
+  "SPECIAL/DCFP2OL": {
+    "status": "excluded",
+    "reason": "User visual review (2026-09-08): fluid-family sibling of DCP2OL/DCPOL - user said discard the fluid ones too."
+  },
+  "SPECIAL/DCFP2OL2": {
+    "status": "excluded",
+    "reason": "User visual review (2026-09-08): fluid-family sibling - same call."
+  },
+  "SPECIAL/SH2": {
+    "status": "verified_ok",
+    "reason": "User visual review (2026-09-08): keep - legitimate despite (0,0) pin geometry."
+  },
+  "IEC_symbol/XBD": {
+    "status": "verified_ok",
+    "reason": "User visual review (2026-09-08): keep."
+  },
+  "IEC_symbol/XSD": {
+    "status": "verified_ok",
+    "reason": "User visual review (2026-09-08): keep - pair of XBD."
+  },
+  "IEC_symbol/MASSE": {
+    "status": "verified_ok",
+    "reason": "User visual review (2026-09-08): keep."
+  },
+  "IEC_symbol/ANT": {
+    "status": "verified_ok",
+    "reason": "User visual review (2026-09-08): keep."
+  }
+}

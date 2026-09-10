@@ -630,14 +630,24 @@ def live_symbol_catalog(library: str = None, symbol: str = None,
 
             List<object> syms = new List<object>();
             int matched = 0;
-            // Walk by INDEX - proven to enumerate a library exhaustively, and it
-            // stops at the first index that does not resolve.
+            // Walk by INDEX across the full 0..5000 range. SymbolIds are
+            // SPARSE within a library, so every index is tried and a
+            // construction failure is skipped (continue), never taken as
+            // "the library ends here" (break) - see the comment at the try/
+            // catch below for the finding that corrected this.
             for (int i = 0; i < 5000; i++)
             {
                 object sym = null;
+                // SymbolIds are SPARSE - a library can hold ids well past the
+                // first one that fails to construct (SPECIAL/DCP2JICM is id
+                // 402, "SPECIAL" itself runs dry at 72 and picks up again
+                // higher up). continue, not break, or every id above the
+                // first gap goes permanently invisible to this listing while
+                // "truncated" still reports false - see
+                // Testing/09-symbol-catalog-enumeration-gap.md.
                 try { sym = symCtorInt.Invoke(new object[] { lib, i }); }
-                catch { break; }
-                if (sym == null) break;
+                catch { continue; }
+                if (sym == null) continue;
                 if (PropText(sym, "IsValid") != "True") continue;
                 string sname = PropText(sym, "Name");
                 if (sname == null) continue;
@@ -2286,9 +2296,12 @@ def live_routing_catalog(symbol_type: str = None, directions: list = None,
                 for (int i = 0; i < 5000; i++)
                 {
                     object s = null;
+                    // Same sparse-SymbolId gap as live_symbol_catalog's depth-2
+                    // walk (Testing/09-symbol-catalog-enumeration-gap.md) -
+                    // continue past a gap instead of stopping at the first one.
                     try { s = symByIdx.Invoke(new object[] { lib, i }); }
-                    catch { break; }  // walked off the end
-                    if (s == null) break;
+                    catch { continue; }
+                    if (s == null) continue;
                     if (PropText(s, "IsValid") != "True") continue;
                     string tn = PropText(s, "Type");
                     if (tn == null || !wantTypes.Contains(tn)) continue;
@@ -3026,3 +3039,4 @@ def live_place_connected(page: str, to_handle: str, to_pin: int,
                     "and read it back with live_read_connections.",
         }
     return out
+

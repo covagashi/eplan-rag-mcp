@@ -103,7 +103,13 @@ of time and can only be learned by trying. A `creates_clrType` column records
 what a single probe found out, once, so nothing has to rediscover it by
 stranding an orphan on a production page.
 
-## Building it depends on a one-line fix
+## Building it depends on a one-line fix — DONE (2026-09-08)
+
+Both `break`s (this one and the identical bug in `live_routing_catalog`) are
+now `continue`. Verified live: `SPECIAL` enumerates 452 symbols instead of 73.
+The project-derived parquet described below is no longer blocked by this.
+
+## (original note, kept for the record)
 
 Enumerating a library is currently impossible, and `09-symbol-catalog-enumeration-gap.md`
 records the symptom. The cause is in `schematic.py`, in the depth-2 walk:

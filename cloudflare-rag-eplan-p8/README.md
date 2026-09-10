@@ -1,5 +1,7 @@
 # EPLAN P8 Documentation RAG — Cloudflare MCP Server
 
+*Part of the [EPLAN AI Automation Toolkit](../README.md).*
+
 Remote MCP server that lets Claude search the **EPLAN Electric P8** documentation (API Reference, User Guide, hidden actions) through semantic vector search.
 
 Deployed on Cloudflare Workers with Vectorize + Workers AI.
