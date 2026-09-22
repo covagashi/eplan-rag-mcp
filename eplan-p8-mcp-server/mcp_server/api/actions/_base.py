@@ -169,16 +169,25 @@ def _execute_with_quiet_mode(action: str) -> dict:
 # it. The snapshot carries mtime and size, not just names, because an export
 # that OVERWRITES a file from an earlier run changes no name at all - a
 # name-only diff would report that nothing was written.
+#
+# The diff costs one scandir+stat per file already in the directory, twice
+# per export. That is nothing next to the remote export round-trip for a
+# normal output folder, but it is unbounded, so the scan gives up above
+# _SNAPSHOT_MAX_FILES and verification is reported as unavailable instead.
+
+_SNAPSHOT_MAX_FILES = 5000
+_SNAPSHOT_TOO_LARGE = "too-large"
 
 
-def _snapshot_dir(directory: str) -> Optional[dict]:
+def _snapshot_dir(directory: str) -> Optional[object]:
     """
     {normcased name: (real name, mtime_ns, size)} for the files in *directory*.
 
     Returns None if the directory cannot be listed - it does not exist yet, it
     is on a share this process cannot read, or EPLAN is on another machine.
-    That is reported to the caller as unavailable verification, never as
-    "nothing was written".
+    Returns _SNAPSHOT_TOO_LARGE once more than _SNAPSHOT_MAX_FILES files have
+    been seen, without stat-ing the rest. Both are reported to the caller as
+    unavailable verification, never as "nothing was written".
     """
     snapshot = {}
     try:
@@ -196,19 +205,32 @@ def _snapshot_dir(directory: str) -> Optional[dict]:
                 snapshot[os.path.normcase(entry.name)] = (
                     entry.name, stat.st_mtime_ns, stat.st_size
                 )
+                if len(snapshot) > _SNAPSHOT_MAX_FILES:
+                    return _SNAPSHOT_TOO_LARGE
     except OSError:
         return None
     return snapshot
 
 
 def _report_written_files(result: dict, export_file: str,
-                          directory: str, before: Optional[dict]) -> dict:
+                          directory: str, before) -> dict:
     """Add requestedFile/writtenFiles/requestedFileWritten to *result*."""
     result = dict(result)
     requested = os.path.abspath(export_file)
     result["requestedFile"] = requested
 
-    after = _snapshot_dir(directory)
+    # The after-scan is only worth taking if it has a before-scan to diff
+    # against; skipping it saves a second full pass over a large directory.
+    after = _snapshot_dir(directory) if isinstance(before, dict) else before
+    if _SNAPSHOT_TOO_LARGE in (before, after):
+        result["verification"] = (
+            "unavailable: %s holds more than %d files, so it was not diffed "
+            "to find out what EPLAN wrote there. The export itself may well "
+            "have succeeded - check the directory yourself rather than "
+            "trusting requestedFile."
+            % (directory, _SNAPSHOT_MAX_FILES)
+        )
+        return result
     if before is None or after is None:
         result["verification"] = (
             "unavailable: could not list %s, so what EPLAN wrote there is "
