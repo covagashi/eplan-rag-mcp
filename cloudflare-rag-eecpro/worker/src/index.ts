@@ -37,6 +37,90 @@ const EECPRO_CATEGORIES = [
   "tuttext", "tutword",
 ] as const;
 
+// --- Search pipeline (embed + vector query, edge-cached) ---
+
+const EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5";
+const MAX_TOP_K = 20;
+// The index is a static docs corpus, so results for a given (query, topK, category)
+// are stable. Bump SEARCH_CACHE_VERSION after re-indexing to invalidate old entries.
+const SEARCH_CACHE_VERSION = 1;
+const SEARCH_CACHE_TTL_SECONDS = 6 * 60 * 60;
+const SEARCH_CACHE_ORIGIN = "https://eecpro-rag-search-cache.internal";
+
+function searchCacheKey(query: string, topK: number, category?: string): Request {
+  const params = new URLSearchParams({
+    v: String(SEARCH_CACHE_VERSION),
+    q: query.trim().replace(/\s+/g, " ").toLowerCase(),
+    k: String(topK),
+    c: category ?? "",
+  });
+  return new Request(`${SEARCH_CACHE_ORIGIN}/search?${params}`, { method: "GET" });
+}
+
+async function searchDocs(
+  env: Env,
+  query: string,
+  topK: number,
+  category?: string
+): Promise<VectorMatch[]> {
+  const k = Math.min(topK, MAX_TOP_K);
+  const cache = caches.default;
+  const cacheKey = searchCacheKey(query, k, category);
+
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    return (await cached.json()) as VectorMatch[];
+  }
+
+  const embResponse = await env.AI.run(EMBEDDING_MODEL, { text: [query] });
+  const queryVector = embResponse.data[0];
+
+  const vectorQuery: VectorizeQueryOptions = {
+    topK: k,
+    returnValues: false,
+    returnMetadata: "all",
+  };
+  if (category) {
+    vectorQuery.filter = { category: { $eq: category } };
+  }
+
+  const results = await env.VECTOR_INDEX.query(queryVector, vectorQuery);
+  const matches: VectorMatch[] = results.matches.map((m: VectorizeMatch) => ({
+    id: m.id,
+    score: m.score,
+    metadata: (m.metadata ?? {}) as Record<string, string>,
+  }));
+
+  await cache.put(
+    cacheKey,
+    new Response(JSON.stringify(matches), {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": `public, max-age=${SEARCH_CACHE_TTL_SECONDS}`,
+      },
+    })
+  );
+
+  return matches;
+}
+
+function formatMatchesMarkdown(query: string, matches: VectorMatch[]): string {
+  const formatted = matches
+    .map((m, i) => {
+      const meta = m.metadata ?? {};
+      const lines = [
+        `### ${i + 1}. ${meta.title || "Untitled"} (score: ${m.score.toFixed(4)})`,
+      ];
+      if (meta.category) lines.push(`**Category:** ${meta.category}`);
+      if (meta.source) lines.push(`**Source:** ${meta.source}`);
+      if (meta.header_path) lines.push(`**Section:** ${meta.header_path}`);
+      if (meta.content) lines.push("", meta.content);
+      return lines.join("\n");
+    })
+    .join("\n\n---\n\n");
+  return `Found ${matches.length} results for "${query}":\n\n${formatted}`;
+}
+
 // --- MCP Server Setup ---
 
 function createMcpServer(env: Env): McpServer {
@@ -64,43 +148,12 @@ function createMcpServer(env: Env): McpServer {
         .describe("Filter by doc category (e.g. refformulas, eececad, eecplc, eecscripting, admin, refcommands)"),
     },
     async ({ query, topK, category }) => {
-      const embResponse = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
-        text: [query],
-      });
-      const queryVector = embResponse.data[0];
-
-      const vectorQuery: VectorizeQueryOptions = {
-        topK: topK ?? 5,
-        returnValues: false,
-        returnMetadata: "all",
-      };
-
-      if (category) {
-        vectorQuery.filter = { category: { $eq: category } };
-      }
-
-      const results = await env.VECTOR_INDEX.query(queryVector, vectorQuery);
-
-      const formatted = results.matches
-        .map((m: VectorMatch, i: number) => {
-          const meta = (m.metadata ?? {}) as Record<string, string>;
-          const lines = [
-            `### ${i + 1}. ${meta.title || "Untitled"} (score: ${m.score.toFixed(4)})`,
-          ];
-          if (meta.category) lines.push(`**Category:** ${meta.category}`);
-          if (meta.source) lines.push(`**Source:** ${meta.source}`);
-          if (meta.header_path)
-            lines.push(`**Section:** ${meta.header_path}`);
-          if (meta.content) lines.push("", meta.content);
-          return lines.join("\n");
-        })
-        .join("\n\n---\n\n");
-
+      const matches = await searchDocs(env, query, topK ?? 5, category);
       return {
         content: [
           {
             type: "text" as const,
-            text: `Found ${results.matches.length} results for "${query}":\n\n${formatted}`,
+            text: formatMatchesMarkdown(query, matches),
           },
         ],
       };
@@ -263,36 +316,7 @@ async function handleMcpRequest(
           });
         }
 
-        const embResponse = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
-          text: [query],
-        });
-        const queryVector = embResponse.data[0];
-
-        const vectorQuery: VectorizeQueryOptions = {
-          topK: Math.min(topK, 20),
-          returnValues: false,
-          returnMetadata: "all",
-        };
-
-        if (category) {
-          vectorQuery.filter = { category: { $eq: category } };
-        }
-
-        const results = await env.VECTOR_INDEX.query(queryVector, vectorQuery);
-
-        const formatted = results.matches
-          .map((m: VectorMatch, i: number) => {
-            const meta = (m.metadata ?? {}) as Record<string, string>;
-            const lines = [
-              `### ${i + 1}. ${meta.title || "Untitled"} (score: ${m.score.toFixed(4)})`,
-            ];
-            if (meta.category) lines.push(`**Category:** ${meta.category}`);
-            if (meta.source) lines.push(`**Source:** ${meta.source}`);
-            if (meta.header_path) lines.push(`**Section:** ${meta.header_path}`);
-            if (meta.content) lines.push("", meta.content);
-            return lines.join("\n");
-          })
-          .join("\n\n---\n\n");
+        const matches = await searchDocs(env, query, topK, category);
 
         return json({
           jsonrpc: "2.0",
@@ -301,7 +325,7 @@ async function handleMcpRequest(
             content: [
               {
                 type: "text",
-                text: `Found ${results.matches.length} results for "${query}":\n\n${formatted}`,
+                text: formatMatchesMarkdown(query, matches),
               },
             ],
           },
@@ -479,28 +503,13 @@ async function handleSearch(
     return json({ error: "Missing 'query' field" }, 400, corsHeaders);
   }
 
-  const embResponse = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
-    text: [query],
-  });
-  const queryVector = embResponse.data[0];
-
-  const vectorQuery: VectorizeQueryOptions = {
-    topK: Math.min(topK, 20),
-    returnValues: false,
-    returnMetadata: "all",
-  };
-
-  if (category) {
-    vectorQuery.filter = { category: { $eq: category } };
-  }
-
-  const results = await env.VECTOR_INDEX.query(queryVector, vectorQuery);
+  const matches = await searchDocs(env, query, topK, category);
 
   return json(
     {
       query,
-      results: results.matches.map((m: VectorMatch) => {
-        const meta = (m.metadata ?? {}) as Record<string, string>;
+      results: matches.map((m: VectorMatch) => {
+        const meta = m.metadata ?? {};
         return {
           id: m.id,
           score: m.score,
@@ -512,7 +521,7 @@ async function handleSearch(
           header_path: meta.header_path || "",
         };
       }),
-      count: results.matches.length,
+      count: matches.length,
     },
     200,
     corsHeaders
