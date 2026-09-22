@@ -164,8 +164,6 @@ async function handleMcpRequest(
     params?: Record<string, unknown>;
   };
 
-  const server = createMcpServer(env);
-
   const method = body.method;
 
   if (method === "initialize") {

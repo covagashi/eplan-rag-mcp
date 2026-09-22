@@ -151,8 +151,6 @@ async function handleMcpRequest(
     params?: Record<string, unknown>;
   };
 
-  const server = createMcpServer(env);
-
   // Handle JSON-RPC methods manually for Cloudflare Workers compatibility
   const method = body.method;
 
