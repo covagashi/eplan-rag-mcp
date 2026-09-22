@@ -123,6 +123,13 @@ class ToolRegistry:
     def __init__(self):
         self._entries = {}   # tool_name -> {module, attr, prefix, published}
         self._order = []     # insertion order, for stable overviews
+        # Introspection caches, keyed by tool name and holding the function
+        # object they were built from. Entries are reused only while
+        # resolve() still returns that same object, so a monkeypatched or
+        # reloaded module is picked up on the next call exactly as before.
+        self._info_cache = {}   # tool_name -> (func, record without "published")
+        self._sig_cache = {}    # tool_name -> (func, signature | None)
+        self._meta_cache = {}   # tool_name -> (func, FuncMetadata | None)
 
     # -- population ---------------------------------------------------------
 
@@ -130,6 +137,9 @@ class ToolRegistry:
         """Record one tool. Re-adding a name updates it (last registration wins)."""
         if tool_name not in self._entries:
             self._order.append(tool_name)
+        self._info_cache.pop(tool_name, None)
+        self._sig_cache.pop(tool_name, None)
+        self._meta_cache.pop(tool_name, None)
         self._entries[tool_name] = {
             "module": module,
             "attr": attr,
@@ -191,6 +201,41 @@ class ToolRegistry:
         return difflib.get_close_matches(
             str(name), self._order, n=_CLOSE_MATCHES, cutoff=0.4)
 
+    def _signature(self, tool_name, func):
+        """
+        inspect.signature(func), or None if it has none, cached until
+        resolve() hands back a different object for *tool_name*.
+        """
+        cached = self._sig_cache.get(tool_name)
+        if cached is not None and cached[0] is func:
+            return cached[1]
+        try:
+            sig = inspect.signature(func)
+        except (TypeError, ValueError):
+            sig = None
+        self._sig_cache[tool_name] = (func, sig)
+        return sig
+
+    def _metadata(self, tool_name, func):
+        """
+        FuncMetadata for the live function, or None when no argument model
+        applies (see _coerce_arguments). Cached like _signature.
+        """
+        cached = self._meta_cache.get(tool_name)
+        if cached is not None and cached[0] is func:
+            return cached[1]
+        meta = None
+        sig = self._signature(tool_name, func)
+        if (func_metadata is not None and sig is not None
+                and not any(p.kind is inspect.Parameter.VAR_KEYWORD
+                            for p in sig.parameters.values())):
+            try:
+                meta = func_metadata(func)
+            except Exception:
+                meta = None
+        self._meta_cache[tool_name] = (func, meta)
+        return meta
+
     def _info(self, tool_name):
         """Introspected record for one tool. Always reads the live function."""
         entry = self._entries[tool_name]
@@ -200,20 +245,24 @@ class ToolRegistry:
                     "signature": tool_name + "(...)", "parameters": [],
                     "published": entry["published"],
                     "error": "function is no longer available on its module"}
-        doc = inspect.getdoc(func) or ""
-        try:
-            sig = inspect.signature(func)
-        except (TypeError, ValueError):
-            sig = None
-        return {
-            "name": tool_name,
-            "module": _short_module(func, entry["attr"]),
-            "summary": _first_line(doc),
-            "doc": doc,
-            "signature": (tool_name + str(sig)) if sig is not None else tool_name + "(...)",
-            "parameters": _param_records(sig),
-            "published": entry["published"],
-        }
+        cached = self._info_cache.get(tool_name)
+        if cached is None or cached[0] is not func:
+            doc = inspect.getdoc(func) or ""
+            sig = self._signature(tool_name, func)
+            record = {
+                "name": tool_name,
+                "module": _short_module(func, entry["attr"]),
+                "summary": _first_line(doc),
+                "doc": doc,
+                "signature": (tool_name + str(sig)) if sig is not None else tool_name + "(...)",
+                "parameters": _param_records(sig),
+            }
+            cached = (func, record)
+            self._info_cache[tool_name] = cached
+        info = dict(cached[1])
+        info["parameters"] = [dict(p) for p in info["parameters"]]
+        info["published"] = entry["published"]
+        return info
 
     # -- meta-tool implementations -----------------------------------------
 
@@ -361,10 +410,7 @@ class ToolRegistry:
                     "error": "arguments must be an object mapping parameter names "
                              "to values, got " + type(arguments).__name__ + "."}
 
-        try:
-            sig = inspect.signature(func)
-        except (TypeError, ValueError):
-            sig = None
+        sig = self._signature(resolved, func)
 
         if sig is not None:
             variadic = (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
@@ -406,7 +452,8 @@ class ToolRegistry:
         # mode would reject - silently producing a wrong EPLAN action instead
         # of a validation error. Audit #42 item 9.
         try:
-            arguments = self._coerce_arguments(func, arguments)
+            arguments = self._coerce_arguments(
+                self._metadata(resolved, func), arguments)
         except _ArgValidationError as e:
             return {"success": False, "tool": resolved,
                     "error": "Argument validation failed: %s" % (e,)}
@@ -419,10 +466,11 @@ class ToolRegistry:
         return _normalize_result(result)
 
     @staticmethod
-    def _coerce_arguments(func, arguments):
+    def _coerce_arguments(meta, arguments):
         """
-        Validate and coerce *arguments* against *func*'s annotations the same
-        way FastMCP's full-mode dispatch does.
+        Validate and coerce *arguments* against the function's annotations the
+        same way FastMCP's full-mode dispatch does, using the FuncMetadata
+        model _metadata() built (None when no model applies).
 
         Returns the coerced dict. Raises _ArgValidationError on a real
         validation failure. Falls back to the raw arguments, unchanged,
@@ -437,16 +485,9 @@ class ToolRegistry:
           would reject every legitimate call to this genuinely supported
           shape. See test_new_actions_offline.py's "raw_tails" set.
         """
-        if func_metadata is None:
+        if meta is None:
             return arguments
         try:
-            sig = inspect.signature(func)
-        except (TypeError, ValueError):
-            return arguments
-        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
-            return arguments
-        try:
-            meta = func_metadata(func)
             validated = meta.arg_model.model_validate(arguments)
         except ValidationError as e:
             raise _ArgValidationError(str(e)) from None
