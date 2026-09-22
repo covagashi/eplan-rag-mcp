@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "api"))
 
 # Import the actions package (QuietMode execution)
 import api.actions as eplan_actions
+from api.actions import _project_cache
 from tool_registry import ToolRegistry, make_meta_tools, META_TOOL_NAMES
 
 
@@ -186,6 +187,7 @@ def eplan_connect(host: str = None, port: str = None, version: str = None) -> st
             host, port = maybe_host, maybe_port
 
     manager = get_manager(version)
+    _project_cache.bump()
     result = manager.connect(host=host, port=port)
     result["target_version"] = manager.target_version
     return json.dumps(result, indent=2)
@@ -194,6 +196,7 @@ def eplan_connect(host: str = None, port: str = None, version: str = None) -> st
 def eplan_disconnect() -> str:
     """Disconnect from EPLAN."""
     manager = get_manager()
+    _project_cache.bump()
     return json.dumps(manager.disconnect(), indent=2)
 
 

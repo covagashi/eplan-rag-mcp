@@ -71,11 +71,14 @@ Traps that cost real debugging time, all encoded below:
     primitive #1 rather than an afterthought.
 """
 
+import copy
 import math
 import re
+import time
 import uuid
 
 from ._base import cs_escape
+from . import _project_cache
 from .live import _script
 from .scripted import _execute_script
 from .fixtures import SCRATCH_ROOT
@@ -2230,6 +2233,19 @@ def live_routing_catalog(symbol_type: str = None, directions: list = None,
         symbol matches, they are ALL returned rather than one being chosen:
         which is correct is a house convention, not something this can decide.
     """
+    args, problem = _catalog_args(symbol_type, directions, library)
+    if problem:
+        return problem
+    stype, want, lib_cs = args
+
+    out = _routing_catalog_walk(stype, lib_cs, timeout_seconds)
+    if out.get("success"):
+        _routing_catalog_remember(stype, lib_cs, out)
+    return _filter_catalog(out, want)
+
+
+def _catalog_args(symbol_type, directions, library):
+    """Validate and normalise live_routing_catalog's arguments."""
     try:
         stype = cs_text(symbol_type, "symbol_type") if symbol_type else None
         lib_cs = cs_escape(cs_text(library, "library")) if library else None
@@ -2242,20 +2258,78 @@ def live_routing_catalog(symbol_type: str = None, directions: list = None,
             for d in directions:
                 d = cs_text(d, "directions entry").strip().title()
                 if d not in valid:
-                    return {"success": False,
-                            "error": "Unknown direction %r. PinBase.Directions is "
-                                     "Up, Down, Left, Right (or Undefined)." % d}
+                    return None, {"success": False,
+                                  "error": "Unknown direction %r. PinBase.Directions is "
+                                           "Up, Down, Left, Right (or Undefined)." % d}
                 want.append(d)
     except SchematicValueError as exc:
-        return _err(exc)
+        return None, _err(exc)
 
     if stype and stype not in ROUTING_SYMBOL_TYPES:
-        return {
+        return None, {
             "success": False,
             "error": "symbol_type %r is not a connection-symbol type. Known: %s"
                      % (stype, ", ".join(ROUTING_SYMBOL_TYPES)),
         }
+    return (stype, want, lib_cs), None
 
+
+# The unfiltered library walk, per (symbol_type, library), for the project
+# it was read from. Direction matching is applied afterwards in Python, so one
+# walk serves every corner orientation and every T-node of one type.
+#
+# Symbol libraries are static while a page is being wired, but the OPEN
+# project is not: the user can switch it in the GUI without this process
+# seeing it. Hence the three-way staleness test in `_routing_catalog_cached`:
+# the invalidation generation (our own open/close/disconnect), a TTL, and the
+# project name the write-back reports.
+_ROUTING_CATALOG_CACHE = {}
+ROUTING_CATALOG_TTL_SECONDS = 600.0
+
+
+def _routing_catalog_remember(stype, lib_cs, out):
+    _ROUTING_CATALOG_CACHE[(stype, lib_cs)] = {
+        "generation": _project_cache.generation(),
+        "read_at": time.monotonic(),
+        "project": out.get("project"),
+        "out": copy.deepcopy(out),
+    }
+
+
+def _routing_catalog_forget(project=None):
+    """Drop cached walks - all of them, or only those read from `project`."""
+    if project is None:
+        _ROUTING_CATALOG_CACHE.clear()
+        return
+    for key in [k for k, v in _ROUTING_CATALOG_CACHE.items()
+                if v.get("project") == project]:
+        del _ROUTING_CATALOG_CACHE[key]
+
+
+def _routing_catalog_cached(stype, want, timeout_seconds):
+    """
+    `live_routing_catalog(symbol_type=stype, directions=want)` served from the
+    cache when a fresh enough walk exists, else from EPLAN.
+
+    Returns (catalog, hit) so a caller can tell a served-from-cache answer
+    apart and re-read after a write that reveals the cache was stale.
+    """
+    entry = _ROUTING_CATALOG_CACHE.get((stype, None))
+    if entry and (entry["generation"] != _project_cache.generation()
+                  or time.monotonic() - entry["read_at"] > ROUTING_CATALOG_TTL_SECONDS):
+        del _ROUTING_CATALOG_CACHE[(stype, None)]
+        entry = None
+    if entry:
+        return _filter_catalog(copy.deepcopy(entry["out"]), want), True
+
+    out = _routing_catalog_walk(stype, None, timeout_seconds)
+    if out.get("success"):
+        _routing_catalog_remember(stype, None, out)
+    return _filter_catalog(out, want), False
+
+
+def _routing_catalog_walk(stype, lib_cs, timeout_seconds):
+    """Enumerate the project's connection symbols of `stype` - the slow part."""
     types_cs = ", ".join('"%s"' % t for t in ([stype] if stype else ROUTING_SYMBOL_TYPES))
     lib_filter = ""
     if lib_cs:
@@ -2312,11 +2386,15 @@ def live_routing_catalog(symbol_type: str = None, directions: list = None,
 '''
     body = _fill(body, TYPES=types_cs, **({"LIBNAME": '"%s"' % lib_cs} if lib_cs else {}))
 
-    out = _shape(_execute_script(
+    return _shape(_execute_script(
         _script(_cls("RoutCat"), body,
                 extra_helpers=_HELPERS_SCHEMATIC + _HELPERS_ROUTING),
         timeout=timeout_seconds,
     ))
+
+
+def _filter_catalog(out, want):
+    """Apply the `directions` filter and summaries to a raw walk result."""
     if not out.get("success"):
         return out
 
@@ -2702,24 +2780,57 @@ def live_place_corner(page: str, x: float, y: float, directions: list,
                          "facing the same way is a straight run, which needs no "
                          "symbol at all - EPLAN autoconnects it." % (directions,)}
 
-    cat = live_routing_catalog(symbol_type="Routing", directions=directions,
-                               timeout_seconds=timeout_seconds)
-    picked, problem = _pick(cat, directions, symbol, "corner (Symbol.Type Routing)",
-                            variant_nr=variant_nr)
-    if problem:
-        return problem
-    sym, vnr, why = picked
-
-    out = live_place_connection_symbol(
-        page, sym["library"], sym["symbol"], x, y, variant_nr=vnr,
-        snap_to_grid=snap_to_grid, allow_real_project=allow_real_project,
-        timeout_seconds=timeout_seconds)
+    out, sym, vnr, why = _pick_and_place(
+        "Routing", directions, symbol, "corner (Symbol.Type Routing)", variant_nr,
+        page, x, y, snap_to_grid, allow_real_project, timeout_seconds)
     if out.get("success"):
         out["chosen"] = {"library": sym["library"], "symbol": sym["symbol"],
                          "variantNr": vnr, "type": sym.get("type"),
                          "directions": directions,
                          "why": why}
     return out
+
+
+def _pick_and_place(stype, directions, symbol, kind, variant_nr,
+                    page, x, y, snap_to_grid, allow_real_project, timeout_seconds):
+    """
+    The shared half of live_place_corner / live_place_tnode: find the symbol
+    in the (cached) catalog, pick one, place it.
+
+    Returns (result, sym, variant_nr, why); on a refusal `result` is the
+    problem and the other three are None.
+
+    A cache hit is trusted for the write, then checked against what the write
+    reports: if the placement names a different project than the walk was read
+    from, or fails outright, the cached walk is dropped and the whole thing is
+    done once more from a fresh read - so a stale cache costs one extra round
+    trip, never a wrong answer.
+    """
+    args, problem = _catalog_args(stype, directions, None)
+    if problem:
+        return problem, None, None, None
+    _, want, _ = args
+
+    cat, hit = _routing_catalog_cached(stype, want, timeout_seconds)
+    picked, problem = _pick(cat, directions, symbol, kind, variant_nr=variant_nr)
+    if problem:
+        return problem, None, None, None
+    sym, vnr, why = picked
+
+    out = live_place_connection_symbol(
+        page, sym["library"], sym["symbol"], x, y, variant_nr=vnr,
+        snap_to_grid=snap_to_grid, allow_real_project=allow_real_project,
+        timeout_seconds=timeout_seconds)
+
+    if hit and (not out.get("success")
+                or (out.get("project") and cat.get("project")
+                    and out["project"] != cat["project"])):
+        _routing_catalog_forget(project=cat.get("project"))
+        if not out.get("success"):
+            return _pick_and_place(stype, directions, symbol, kind, variant_nr,
+                                   page, x, y, snap_to_grid, allow_real_project,
+                                   timeout_seconds)
+    return out, sym, vnr, why
 
 
 def live_place_tnode(page: str, x: float, y: float, branch_direction: str,
@@ -2769,20 +2880,13 @@ def live_place_tnode(page: str, x: float, y: float, branch_direction: str,
     # The three legs: the branch, plus the two along the perpendicular axis.
     legs = ([d, "Left", "Right"] if d in ("Up", "Down") else [d, "Up", "Down"])
 
-    cat = live_routing_catalog(symbol_type=stype, directions=legs,
-                               timeout_seconds=timeout_seconds)
-    picked, problem = _pick(cat, legs, symbol, "T-node of type %s" % stype,
-                            variant_nr=variant_nr)
-    if problem:
-        problem["branchDirection"] = d
-        problem["symbolType"] = stype
-        return problem
-    sym, vnr, why = picked
-
-    out = live_place_connection_symbol(
-        page, sym["library"], sym["symbol"], x, y, variant_nr=vnr,
-        snap_to_grid=snap_to_grid, allow_real_project=allow_real_project,
-        timeout_seconds=timeout_seconds)
+    out, sym, vnr, why = _pick_and_place(
+        stype, legs, symbol, "T-node of type %s" % stype, variant_nr,
+        page, x, y, snap_to_grid, allow_real_project, timeout_seconds)
+    if sym is None:
+        out["branchDirection"] = d
+        out["symbolType"] = stype
+        return out
     if out.get("success"):
         out["chosen"] = {"library": sym["library"], "symbol": sym["symbol"],
                          "variantNr": vnr, "type": stype,
