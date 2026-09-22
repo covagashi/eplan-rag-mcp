@@ -74,7 +74,7 @@ def test_nothing_running_before_uses_the_fast_path(fake_launch, clock, monkeypat
                         lambda: _manager(servers=[{"port": "49153"}]))
     monkeypatch.setattr(lifecycle, "_eplan_pids", lambda: [])
     monkeypatch.setattr(lifecycle, "_eplan_listening_ports",
-                        lambda only_pids=None: pytest.fail("should not reach the filtered path"))
+                        lambda only_pids=None, pids=None: pytest.fail("should not reach the filtered path"))
     result = lifecycle.app_launch(wait_seconds=10)
     assert result["success"] is True
     assert result["servers"] == [{"port": "49153"}]
@@ -94,7 +94,7 @@ def test_pre_existing_instance_is_not_connected_to(fake_launch, clock, monkeypat
     monkeypatch.setattr(lifecycle, "_eplan_pids", lambda: [1111])  # the old instance, unchanged
     seen_only_pids = []
 
-    def fake_ports(only_pids=None):
+    def fake_ports(only_pids=None, pids=None):
         seen_only_pids.append(set(only_pids) if only_pids is not None else None)
         return []  # the new instance's port never appears within the window
 
@@ -122,7 +122,7 @@ def test_pre_existing_instance_new_port_is_found_and_used(fake_launch, clock, mo
     monkeypatch.setattr(lifecycle, "_eplan_pids",
                         lambda: [1111, fake_launch.pid])  # old + the one we just started
 
-    def fake_ports(only_pids=None):
+    def fake_ports(only_pids=None, pids=None):
         assert only_pids is not None
         assert 1111 not in only_pids
         assert fake_launch.pid in only_pids
@@ -139,7 +139,7 @@ def test_pre_existing_instance_new_port_is_found_and_used(fake_launch, clock, mo
 def test_nothing_running_before_and_nothing_ever_appears(fake_launch, clock, monkeypatch):
     monkeypatch.setattr(lifecycle, "get_manager", lambda: _manager(servers=[]))
     monkeypatch.setattr(lifecycle, "_eplan_pids", lambda: [])
-    monkeypatch.setattr(lifecycle, "_eplan_listening_ports", lambda only_pids=None: [])
+    monkeypatch.setattr(lifecycle, "_eplan_listening_ports", lambda only_pids=None, pids=None: [])
     result = lifecycle.app_launch(wait_seconds=10)
     assert result["success"] is False
     assert result["eplan_was_already_running"] is False
