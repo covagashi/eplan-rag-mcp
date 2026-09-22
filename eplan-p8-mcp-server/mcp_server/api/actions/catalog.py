@@ -58,6 +58,10 @@ _REGISTRY = None
 _REGISTRY_META = None
 _REGISTRY_LOWER = None
 _REGISTRY_CMD_INDEX = None
+# name -> lowercased search text (name, description, param names, ribbon
+# labels and "tab > group" paths). Kept outside the entries so
+# action_describe's full-entry output does not grow a synthetic field.
+_REGISTRY_SEARCH = None
 
 
 def _load_registry():
@@ -69,6 +73,7 @@ def _load_registry():
         ready-to-return dict.
     """
     global _REGISTRY, _REGISTRY_META, _REGISTRY_LOWER, _REGISTRY_CMD_INDEX
+    global _REGISTRY_SEARCH
 
     if _REGISTRY is not None:
         return _REGISTRY, _REGISTRY_META, None
@@ -92,7 +97,19 @@ def _load_registry():
     _REGISTRY_META = meta
     _REGISTRY_CMD_INDEX = raw.get("_command_index", {})
     _REGISTRY_LOWER = {k.lower(): k for k in actions}
+    _REGISTRY_SEARCH = {k: _search_text(k, v) for k, v in actions.items()}
     return _REGISTRY, _REGISTRY_META, None
+
+
+def _search_text(name, entry):
+    """Lowercased haystack action_catalog(search=...) matches against."""
+    gui = entry.get("gui") or {}
+    return " ".join(
+        [name, entry.get("description") or ""]
+        + _param_names(entry)
+        + list(gui.get("labels") or [])
+        + list(gui.get("ribbon_paths") or [])
+    ).lower()
 
 
 def _param_names(entry):
@@ -209,20 +226,12 @@ def action_catalog(
                 cats = (entry.get("gui") or {}).get("categories") or []
                 if cat not in [str(c) for c in cats]:
                     continue
-            if needle:
-                gui = entry.get("gui") or {}
-                # Ribbon button text and its tab > group path are searched too,
-                # because people look for the words on the button ("Coordinate
-                # input") rather than the internal action name
-                # (GedEditGuiPosDialogShow).
-                haystack = " ".join(
-                    [name, entry.get("description") or ""]
-                    + _param_names(entry)
-                    + list(gui.get("labels") or [])
-                    + list(gui.get("ribbon_paths") or [])
-                ).lower()
-                if needle not in haystack:
-                    continue
+            # Ribbon button text and its tab > group path are searched too,
+            # because people look for the words on the button ("Coordinate
+            # input") rather than the internal action name
+            # (GedEditGuiPosDialogShow).
+            if needle and needle not in _REGISTRY_SEARCH[name]:
+                continue
             matches.append(entry)
 
         matches.sort(key=lambda e: (not e.get("documented"), (e.get("name") or "").lower()))
