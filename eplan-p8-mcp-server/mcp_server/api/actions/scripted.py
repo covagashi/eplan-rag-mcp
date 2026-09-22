@@ -453,12 +453,18 @@ def _execute_script(script_content: str, timeout: float = 30.0) -> dict:
                 return result
             time.sleep(0.1)
 
-        # Small delay to ensure file is fully written
-        time.sleep(0.1)
-
-        # Read results
-        with open(result_path, "r", encoding="utf-8") as f:
-            results = json.load(f)
+        # Read results, tolerating a partially-written file (the C# writer
+        # is not atomic vs our existence probe).
+        for attempt in range(10):
+            if attempt:
+                time.sleep(0.05)
+            try:
+                with open(result_path, "r", encoding="utf-8") as f:
+                    results = json.load(f)
+                break
+            except (json.JSONDecodeError, ValueError):
+                if attempt == 9:
+                    raise
 
         # A script that CAUGHT its own exception still writes a result file, so
         # "the file exists" is not the same as "the operation worked". Returning

@@ -1142,8 +1142,9 @@ public class QuietExecute_{exec_id}
             # Read results, tolerating a partially-written file (the C# writer
             # is not atomic vs our existence probe).
             res_data = None
-            for _ in range(10):
-                time.sleep(0.05)
+            for attempt in range(10):
+                if attempt:
+                    time.sleep(0.05)
                 try:
                     with open(result_path, "r", encoding="utf-8") as f:
                         res_data = json.load(f)
