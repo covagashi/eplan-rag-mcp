@@ -176,6 +176,45 @@ def test_missing_directory_is_not_an_error(tmp_path, fake_export):
     assert result["verification"].startswith("unavailable:")
 
 
+def test_crowded_directory_is_not_diffed(tmp_path, fake_export, monkeypatch):
+    """
+    The diff is O(files-in-dir) twice per export; above the cap it is skipped
+    and reported as unavailable, never as "nothing was written".
+    """
+    monkeypatch.setattr(_base, "_SNAPSHOT_MAX_FILES", 3)
+    for index in range(5):
+        (tmp_path / ("old-%d.pdf" % index)).write_text("stale")
+    fake_export(tmp_path, [("STRUCT-1.pdf", "%PDF-1.7")])
+    scans = []
+    real_snapshot = _base._snapshot_dir
+    monkeypatch.setattr(
+        _base, "_snapshot_dir",
+        lambda directory: scans.append(directory) or real_snapshot(directory))
+
+    result = export_.export_pdf_pages(str(tmp_path / "ltest.pdf"),
+                                      page_names=["+X/1"])
+
+    assert result["success"] is True
+    assert result["verification"].startswith("unavailable:")
+    assert "more than 3 files" in result["verification"]
+    assert "writtenFiles" not in result
+    assert "requestedFileWritten" not in result
+    assert len(scans) == 1
+
+
+def test_directory_at_the_cap_is_still_diffed(tmp_path, fake_export,
+                                              monkeypatch):
+    monkeypatch.setattr(_base, "_SNAPSHOT_MAX_FILES", 3)
+    for index in range(2):
+        (tmp_path / ("old-%d.pdf" % index)).write_text("stale")
+    fake_export(tmp_path, [("STRUCT-1.pdf", "%PDF-1.7")])
+
+    result = export_.export_pdf_pages(str(tmp_path / "ltest.pdf"),
+                                      page_names=["+X/1"])
+
+    assert result["writtenFiles"] == [str(tmp_path / "STRUCT-1.pdf")]
+
+
 def test_a_failed_action_is_passed_through_untouched(tmp_path, fake_export):
     """Nothing to verify, and the failure must not be dressed up."""
     failure = {"executor": "action", "success": False, "message": "boom"}
