@@ -12,7 +12,8 @@ Two registration modes, selected with EPLAN_MCP_MODE:
 
 Requirements:
 - EPLAN installed
-- pip install pythonnet mcp
+- python -m pip install -r eplan-p8-mcp-server/mcp_server/requirements.txt
+  (from the repository root)
 """
 
 import json

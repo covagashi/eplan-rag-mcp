@@ -46,7 +46,7 @@ Model Context Protocol (MCP).
 ### Локальная автоматизация EPLAN (P8)
 
 ```bash
-pip install pythonnet mcp
+python -m pip install -r eplan-p8-mcp-server/mcp_server/requirements.txt
 claude mcp add eplan -- python YOURPATH/eplan-p8-mcp-server/mcp_server/server.py
 claude mcp list   # в списке должен появиться "eplan"
 ```
