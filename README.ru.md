@@ -1,6 +1,6 @@
 # EPLAN AI Automation Toolkit
 
-[English](README.md) · [中文](README.zh-CN.md) · **Русский**
+[English](README.md) · [Español](README.es.md) · [한국어](README.ko.md) · [Deutsch](README.de.md) · [中文](README.zh-CN.md) · **Русский**
 
 [![MCP Badge](https://lobehub.com/badge/mcp/covagashi-eplan_2026_ia_mcp_scripts)](https://lobehub.com/mcp/covagashi-eplan_2026_ia_mcp_scripts)
 

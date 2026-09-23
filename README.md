@@ -1,6 +1,6 @@
 # EPLAN AI Automation Toolkit
 
-**English** · [中文](README.zh-CN.md) · [Русский](README.ru.md)
+**English** · [Español](README.es.md) · [한국어](README.ko.md) · [Deutsch](README.de.md) · [中文](README.zh-CN.md) · [Русский](README.ru.md)
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/covagashi/eplan-rag-mcp)
 [![MCP Badge](https://lobehub.com/badge/mcp/covagashi-eplan_2026_ia_mcp_scripts)](https://lobehub.com/mcp/covagashi-eplan_2026_ia_mcp_scripts)

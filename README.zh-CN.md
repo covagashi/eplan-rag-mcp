@@ -1,6 +1,6 @@
 # EPLAN AI 自动化工具包
 
-[English](README.md) · **中文** · [Русский](README.ru.md)
+[English](README.md) · [Español](README.es.md) · [한국어](README.ko.md) · [Deutsch](README.de.md) · **中文** · [Русский](README.ru.md)
 
 [![MCP Badge](https://lobehub.com/badge/mcp/covagashi-eplan_2026_ia_mcp_scripts)](https://lobehub.com/mcp/covagashi-eplan_2026_ia_mcp_scripts)
 

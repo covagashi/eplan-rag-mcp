@@ -1,7 +1,20 @@
 # LLM Operating Guide — EPLAN AI Automation Toolkit
 
 This file tells you (the LLM) what this toolkit lets you **do** and **configure**.
-It assumes you are connected through one or more of the MCP servers in this repo.
+It assumes you are connected through one or more of the MCP servers described here.
+
+The local `eplan` action server is maintained in this repository. The three
+Cloudflare documentation RAG servers are maintained separately in
+[eplan-cloudflare-rags](https://github.com/covagashi/eplan-cloudflare-rags):
+[P8 2026](https://github.com/covagashi/eplan-cloudflare-rags/tree/main/cloudflare-rag-eplan-p8),
+[P8 2027](https://github.com/covagashi/eplan-cloudflare-rags/tree/main/cloudflare-rag-eplan-2027),
+and [EEC Pro 2026](https://github.com/covagashi/eplan-cloudflare-rags/tree/main/cloudflare-rag-eecpro).
+The [eplan-development skill](https://github.com/covagashi/eplan-development-skill)
+also has its own repository.
+
+Human-readable guides: [English](README.md) · [Español](README.es.md) ·
+[한국어](README.ko.md) · [Deutsch](README.de.md) ·
+[中文](README.zh-CN.md) · [Русский](README.ru.md).
 
 ---
 
