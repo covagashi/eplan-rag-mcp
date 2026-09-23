@@ -75,17 +75,26 @@ TLRO_1 = {"library": "SPECIAL_en_US", "symbol": "TLRO_1", "type": "TNodeUp",
 @pytest.fixture
 def eplan(monkeypatch):
     """A fake EPLAN: catalog reads answer from `state`, writes are recorded."""
-    state = {"symbols": [], "scripts": [], "placed": []}
+    state = {"symbols": [], "scripts": [], "placed": [], "walks": [],
+             "project": "P1", "place_ok": True}
+    S._routing_catalog_forget()
 
     def fake(script, timeout=30.0):
         state["scripts"].append(script)
         if "wantTypes" in script:                       # a catalog read
+            state["walks"].append(script)
             return {"success": True, "results": {
-                "success": True, "libraries": ["SPECIAL_en_US"],
+                "success": True, "project": state["project"],
+                "libraries": ["SPECIAL_en_US"],
                 "symbols": [dict(s) for s in state["symbols"]]}}
         state["placed"].append(script)                   # a placement
+        if not state["place_ok"]:
+            return {"success": True, "results": {
+                "success": False, "project": state["project"],
+                "error": "no such symbol"}}
         return {"success": True, "results": {
             "success": True, "page": "+P/1", "handle": "h1",
+            "project": state["project"],
             "symbolType": "Routing",
             "placed": {"location": {"x": 10.0, "y": 20.0},
                        "boundingBox": [{"x": 9.0, "y": 19.0},
@@ -361,3 +370,114 @@ def test_a_failed_catalog_read_is_not_dressed_up_as_a_placement(monkeypatch):
     monkeypatch.setattr(S, "_execute_script", lambda script, timeout=30.0: {
         "success": False, "message": "no project open"})
     assert S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# The catalog walk is cached between placements
+# ---------------------------------------------------------------------------
+
+def test_repeat_placements_walk_the_libraries_once(eplan):
+    eplan["symbols"] = [CORNER]
+    S.live_place_corner("+P/1", 10.0, 20.0, ["Right", "Down"])
+    S.live_place_corner("+P/1", 30.0, 20.0, ["Right", "Up"])
+    S.live_place_corner("+P/1", 50.0, 20.0, ["Down", "Right"])
+    assert len(eplan["walks"]) == 1
+    assert len(eplan["placed"]) == 3
+
+
+def test_a_cache_hit_answers_exactly_like_a_fresh_read(eplan):
+    eplan["symbols"] = [CORNER]
+    first = S.live_place_corner("+P/1", 10.0, 20.0, ["Right", "Up"])
+    second = S.live_place_corner("+P/1", 30.0, 20.0, ["Right", "Up"])
+    assert first["chosen"] == second["chosen"]
+    assert second["chosen"]["variantNr"] == 1
+
+
+def test_each_tnode_type_is_its_own_walk_and_corners_are_another(eplan):
+    eplan["symbols"] = [CORNER, TLRU, TLRO]
+    S.live_place_tnode("+P/1", 1.0, 2.0, "Down")
+    S.live_place_tnode("+P/1", 3.0, 2.0, "Down")
+    S.live_place_tnode("+P/1", 5.0, 2.0, "Up")
+    S.live_place_corner("+P/1", 7.0, 2.0, ["Right", "Down"])
+    assert len(eplan["walks"]) == 3
+
+
+def test_a_refusal_does_not_poison_the_cache(eplan):
+    """A walk that finds nothing is still a valid walk of THIS project."""
+    eplan["symbols"] = []
+    assert S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])["success"] is False
+    assert S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])["success"] is False
+    assert len(eplan["walks"]) == 1
+
+
+def test_a_failed_read_is_never_cached(monkeypatch, eplan):
+    calls = []
+
+    def flaky(script, timeout=30.0):
+        calls.append(script)
+        return {"success": False, "message": "no project open"}
+
+    monkeypatch.setattr(S, "_execute_script", flaky)
+    S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])
+    S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])
+    assert len(calls) == 2
+
+
+def test_opening_or_closing_a_project_invalidates_the_cache(eplan):
+    from api.actions import _project_cache
+    eplan["symbols"] = [CORNER]
+    S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])
+    _project_cache.bump()
+    S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])
+    assert len(eplan["walks"]) == 2
+
+
+def test_the_cache_expires(eplan, monkeypatch):
+    eplan["symbols"] = [CORNER]
+    S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])
+    now = S.time.monotonic()
+    monkeypatch.setattr(S.time, "monotonic",
+                        lambda: now + S.ROUTING_CATALOG_TTL_SECONDS + 1)
+    S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])
+    assert len(eplan["walks"]) == 2
+
+
+def test_a_placement_that_lands_in_another_project_drops_the_cache(eplan):
+    """The user switched projects in the GUI; the write-back reveals it."""
+    eplan["symbols"] = [CORNER]
+    S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])
+    eplan["project"] = "P2"
+    S.live_place_corner("+P/1", 3.0, 2.0, ["Right", "Down"])
+    assert len(eplan["walks"]) == 1          # the hit was trusted for the write
+    S.live_place_corner("+P/1", 5.0, 2.0, ["Right", "Down"])
+    assert len(eplan["walks"]) == 2          # but not after it
+
+
+def test_a_failed_placement_on_a_cache_hit_is_retried_from_a_fresh_read(eplan):
+    eplan["symbols"] = [CORNER]
+    S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])
+    eplan["place_ok"] = False
+    out = S.live_place_corner("+P/1", 3.0, 2.0, ["Right", "Down"])
+    assert out["success"] is False
+    assert len(eplan["walks"]) == 2
+    assert len(eplan["placed"]) == 3         # the retry placed once more, not twice
+
+
+def test_the_public_catalog_tool_always_reads_fresh_but_warms_the_cache(eplan):
+    eplan["symbols"] = [CORNER]
+    S.live_routing_catalog(symbol_type="Routing")
+    S.live_routing_catalog(symbol_type="Routing")
+    assert len(eplan["walks"]) == 2
+    S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])
+    assert len(eplan["walks"]) == 2
+
+
+def test_the_cache_hands_out_copies_not_its_own_entry(eplan):
+    """Direction filtering drops symbols; it must drop them from a copy."""
+    other = dict(CORNER, symbol="CO_LD", variants=[
+        {"variantNr": 0, "directions": ["Left", "Down"], "pins": []}])
+    eplan["symbols"] = [CORNER, other]
+    assert S.live_place_corner("+P/1", 1.0, 2.0, ["Right", "Down"])["success"]
+    out = S.live_place_corner("+P/1", 3.0, 2.0, ["Left", "Down"])
+    assert out["success"] and out["chosen"]["symbol"] == "CO_LD"
+    assert len(eplan["walks"]) == 1

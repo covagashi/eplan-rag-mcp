@@ -3,6 +3,7 @@ Project management actions.
 """
 
 from ._base import _get_connected_manager, _build_action
+from . import _project_cache
 
 
 def open_project(project_path: str, open_mode: str = None) -> dict:
@@ -23,6 +24,7 @@ def open_project(project_path: str, open_mode: str = None) -> dict:
         return error
 
     action = _build_action("ProjectOpen", Project=project_path, OpenMode=open_mode)
+    _project_cache.bump()
     return manager.execute_action(action)
 
 
@@ -59,6 +61,7 @@ def close_project() -> dict:
     if error:
         return error
 
+    _project_cache.bump()
     return manager.execute_action("XPrjActionProjectClose")
 
 
