@@ -19,6 +19,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DEFAULT_WIKI_DIR = r"D:\3_workbench\Christian\covaga\scrapping_eplan\eplan_api_wiki_2027"
 SKIP_NAMES = {"_index.md", "_symbol_index.md"}
@@ -109,6 +110,7 @@ def main():
     ap.add_argument("--url", required=True, help="Worker base URL, e.g. https://eplan-wiki-2027.<sub>.workers.dev")
     ap.add_argument("--token", required=True, help="INGEST_TOKEN")
     ap.add_argument("--batch-size", type=int, default=15, help="rows per POST -- keep small, some rows are >100KB")
+    ap.add_argument("--workers", type=int, default=4, help="concurrent POSTs in flight (batches are independent: INSERT OR REPLACE keyed by path)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -126,14 +128,20 @@ def main():
             print(f"  {r['kind']:10s} {r['path']}  ({r['size']} bytes)  title={r['title']!r}")
         return
 
+    batches = [rows[i : i + args.batch_size] for i in range(0, len(rows), args.batch_size)]
     inserted = 0
     t0 = time.time()
-    for i in range(0, len(rows), args.batch_size):
-        batch = rows[i : i + args.batch_size]
-        result = post_batch(args.url, args.token, batch)
-        inserted += result.get("inserted", 0)
-        elapsed = time.time() - t0
-        print(f"  [{inserted}/{len(rows)}] ({elapsed:.0f}s)")
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+        futures = [pool.submit(post_batch, args.url, args.token, batch) for batch in batches]
+        try:
+            for fut in as_completed(futures):
+                inserted += fut.result().get("inserted", 0)
+                elapsed = time.time() - t0
+                print(f"  [{inserted}/{len(rows)}] ({elapsed:.0f}s)")
+        except BaseException:
+            for f in futures:
+                f.cancel()
+            raise
 
     print(f"\nDone. Inserted {inserted}/{len(rows)} rows in {time.time() - t0:.0f}s")
 
