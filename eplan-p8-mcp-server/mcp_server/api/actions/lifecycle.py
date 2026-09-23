@@ -153,9 +153,10 @@ def app_launch(version: str = None, variant: str = None, headless: bool = False,
             if fallback_ports:
                 break
         else:
-            new_pids = set(_eplan_pids()) - set(already_running)
+            current_pids = _eplan_pids()
+            new_pids = set(current_pids) - set(already_running)
             new_pids.add(proc.pid)
-            fallback_ports = _eplan_listening_ports(only_pids=new_pids)
+            fallback_ports = _eplan_listening_ports(only_pids=new_pids, pids=current_pids)
             if fallback_ports:
                 break
 

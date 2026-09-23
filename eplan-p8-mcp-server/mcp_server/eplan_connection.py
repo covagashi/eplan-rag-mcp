@@ -217,7 +217,7 @@ def eplan_pids() -> list:
         return []
 
 
-def eplan_listening_ports(only_pids=None) -> list:
+def eplan_listening_ports(only_pids=None, pids=None) -> list:
     """TCP ports EPLAN.exe processes are LISTENING on (via netstat).
 
     Fallback discovery: GetActiveEplanServersOnLocalMachine is unreliable
@@ -232,9 +232,11 @@ def eplan_listening_ports(only_pids=None) -> list:
             PIDs (any iterable, coerced to a set). Used by app_launch to tell
             the instance it just started apart from one that was already
             running - see Audit #42 item 12.
+        pids: Already-computed result of eplan_pids(). If given, skips the
+            internal tasklist spawn.
     """
     import subprocess
-    pids = set(eplan_pids())
+    pids = set(eplan_pids() if pids is None else pids)
     if not pids:
         return []
     if only_pids is not None:
