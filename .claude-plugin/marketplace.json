@@ -5,15 +5,18 @@
     "url": "https://github.com/covagashi"
   },
   "metadata": {
-    "description": "AI-assisted tooling for EPLAN Electric P8: development skills, MCP servers, and documentation RAGs",
-    "version": "1.0.0"
+    "description": "Local EPLAN MCP server with links to development skills and documentation RAGs",
+    "version": "1.1.0"
   },
   "plugins": [
     {
       "name": "eplan-development",
-      "source": "./claude-skills/eplan-development",
-      "description": "Teach Claude to develop with EPLAN Electric P8: C# scripting, EPLAN API (parts database, 3D), Remote Client automation, verified action parameters, and production pitfalls. Covers EPLAN 2022-2027. Mirror of covagashi/eplan-development-skill.",
-      "version": "1.1.0",
+      "source": {
+        "source": "github",
+        "repo": "covagashi/eplan-development-skill"
+      },
+      "description": "Teach Claude to develop with EPLAN Electric P8: C# scripting, EPLAN API (parts database, 3D), Remote Client automation, verified action parameters, and production pitfalls. Covers EPLAN 2022-2027.",
+      "version": "1.2.0",
       "author": {
         "name": "covagashi",
         "url": "https://github.com/covagashi"
@@ -26,7 +29,9 @@
         "csharp",
         "automation"
       ],
-      "category": "development"
+      "category": "development",
+      "strict": false,
+      "skills": ["./skills/eplan-p8/eplan-development"]
     }
   ]
 }

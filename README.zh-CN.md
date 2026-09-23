@@ -6,7 +6,7 @@
 
 面向 **EPLAN Electric P8** 与 **EPLAN EEC Pro 2026** 的 AI 辅助自动化工具，基于模型上下文协议（MCP）构建。
 
-本仓库包含四个相互独立的子项目：一个直接驱动正在运行的 EPLAN 实例的本地 MCP 服务器，以及三个部署在 Cloudflare Workers 上、提供 EPLAN 文档检索的远程 MCP 服务器。
+本仓库包含直接驱动 EPLAN 实例的本地 MCP 服务器。三个远程文档 RAG 位于独立的 [eplan-cloudflare-rags](https://github.com/covagashi/eplan-cloudflare-rags) 仓库。
 
 > 正在和大语言模型一起使用本仓库？请阅读 [`llm.md`](llm.md) —— 它以面向 LLM 的方式
 > 说明了本工具包能做什么、可配置哪些内容。
@@ -15,22 +15,16 @@
 
 ```
 .
-├── eplan-p8-mcp-server/          # 本地：控制 EPLAN P8 的 MCP 服务器
-├── cloudflare-rag-eplan-p8/      # 远程：通过 MCP 提供 P8 文档 RAG 的 Cloudflare Worker
-├── cloudflare-rag-eecpro/        # 远程：通过 MCP 提供 EEC Pro 文档 RAG 的 Cloudflare Worker
-├── cloudflare-rag-eplan-2027/    # 远程：通过 MCP 提供 2027 API 维基的 Cloudflare Worker（D1/FTS5 关键词检索）
-└── claude-skills/                # 技能：covagashi/eplan-development-skill 的镜像
+└── eplan-p8-mcp-server/          # 本地：控制 EPLAN P8 的 MCP 服务器
 ```
 
-| 目录 | 类型 | 用途 | 适用的 EPLAN 产品 |
+| 组件 | 类型 | 用途 | 适用的 EPLAN 产品 |
 |---|---|---|---|
 | `eplan-p8-mcp-server/` | 本地 Python MCP | 从 Claude 驱动正在运行的 EPLAN 实例：打开/关闭项目、导出、报表、脚本 | EPLAN Electric P8 |
-| `cloudflare-rag-eplan-p8/` | 远程 Cloudflare Worker | 以远程 MCP + REST API 的形式提供 P8 文档索引 | EPLAN Electric P8 |
-| `cloudflare-rag-eecpro/` | 远程 Cloudflare Worker | 以远程 MCP + REST API 的形式提供 EEC Pro 文档索引 | EPLAN EEC Pro 2026 |
-| `cloudflare-rag-eplan-2027/` | 远程 Cloudflare Worker | 以远程 MCP 的形式提供 2027 API 维基；使用 D1 + FTS5 关键词检索，与上面的语义索引互补 | EPLAN Electric P8 2027 |
-| `claude-skills/eplan-development/` | Claude Code Skill | 教 Claude 写出正确的 EPLAN 脚本、API 代码和 Remote Client 应用；独立仓库 [**eplan-development-skill**](https://github.com/covagashi/eplan-development-skill) 的镜像 | EPLAN Electric P8 |
+| [**eplan-cloudflare-rags**](https://github.com/covagashi/eplan-cloudflare-rags) | 独立仓库中的远程 Cloudflare Workers | 通过 MCP 和 REST 提供 P8 2026、P8 2027 与 EEC Pro 文档检索 | EPLAN Electric P8 与 EEC Pro |
+| [**eplan-development-skill**](https://github.com/covagashi/eplan-development-skill) | Claude Code Skill，独立仓库 | 教 Claude 写出正确的 EPLAN 脚本、API 代码和 Remote Client 应用 | EPLAN Electric P8 |
 
-每个子项目都有各自的 README，其中包含安装和使用的详细说明。
+每个仓库都有各自的 README，其中包含安装和使用的详细说明。
 
 ## 什么是 MCP？
 
@@ -105,7 +99,7 @@ claude mcp add eecpro-rag -- cmd /c npx mcp-remote https://rageecpro.covaga.xyz/
 claude mcp add eplan-wiki-2027 -- cmd /c npx mcp-remote https://rag2027.covaga.xyz/mcp
 ```
 
-`eplan-wiki-2027` 是一个独立的服务，而不是 `eplan-rag` 从 2026 到 2027 的升级版：它索引的文档版本不同，*并且*检索方式也不同（对 [`cloudflare-rag-eplan-2027/`](cloudflare-rag-eplan-2027/) 内置维基使用 SQLite FTS5/bm25 关键词匹配，而非 Vectorize + bge 语义搜索）。在真实问题上做过正面对比，两者的失效方式不同：精确名称查询（「X 的方法签名是什么」）FTS5 更准，而当提问完全不含文档原词时语义搜索更强。建议两个都装。
+`eplan-wiki-2027` 是一个独立的服务，而不是 `eplan-rag` 从 2026 到 2027 的升级版：它索引的文档版本不同，*并且*检索方式也不同（对 [`cloudflare-rag-eplan-2027/`](https://github.com/covagashi/eplan-cloudflare-rags/tree/main/cloudflare-rag-eplan-2027) 内置维基使用 SQLite FTS5/bm25 关键词匹配，而非 Vectorize + bge 语义搜索）。在真实问题上做过正面对比，两者的失效方式不同：精确名称查询（「X 的方法签名是什么」）FTS5 更准，而当提问完全不含文档原词时语义搜索更强。建议两个都装。
 
 两者同时提供普通的 REST API，在开发过程中用于核对 EPLAN 操作名称和参数非常方便：
 
@@ -117,27 +111,27 @@ curl -X POST https://rag2027.covaga.xyz/search -H "Content-Type: application/jso
      -d '{"query": "FindAction", "topK": 3}'
 ```
 
-工具、REST 接口和架构说明见 [`cloudflare-rag-eplan-p8/README.md`](cloudflare-rag-eplan-p8/README.md) 与 [`cloudflare-rag-eecpro/README.md`](cloudflare-rag-eecpro/README.md)。
+工具、REST 接口和架构说明见 [`cloudflare-rag-eplan-p8/README.md`](https://github.com/covagashi/eplan-cloudflare-rags/blob/main/cloudflare-rag-eplan-p8/README.md) 与 [`cloudflare-rag-eecpro/README.md`](https://github.com/covagashi/eplan-cloudflare-rags/blob/main/cloudflare-rag-eecpro/README.md)。
 
 ### 用于 EPLAN 开发的 Claude Code Skill
 
 MCP 服务器让 Claude 能够对 EPLAN *执行操作*；而 [**eplan-development**](https://github.com/covagashi/eplan-development-skill) 这个 Skill 则教会它 *写出正确的 EPLAN 代码*：脚本入口点、经过验证的操作参数、部件数据库访问、Remote Client 自动化（动态端口、无界面 EPLAN、Cogineer），以及生产环境中的各种陷阱 —— 伪异步命令阻塞、消息循环监视线程、dispose 规范、EPLAN 2025 remoting 的变化。
 
-该 Skill 拥有自己的独立仓库，并且刻意做到**与宿主无关**：它不假定任何 MCP 服务器、任何特定的脚本执行器或任何特定的文档索引，因此无论你是否使用本仓库的其他部分，它都可以单独使用。该仓库为权威副本，本仓库的 `claude-skills/` 只是其镜像。
+该 Skill 拥有自己的独立仓库，并且刻意做到**与宿主无关**：它不假定任何 MCP 服务器、任何特定的脚本执行器或任何特定的文档索引，因此无论你是否使用本仓库的其他部分，它都可以单独使用。
 
 ```
 /plugin marketplace add covagashi/eplan-development-skill
 /plugin install eplan-development@eplan-skills
 ```
 
-本仓库同时也是一个插件市场，因此也可以直接从这里安装该 Skill：
+本仓库同时也是一个插件市场，其中的条目指向同一份独立 Skill：
 
 ```
 /plugin marketplace add covagashi/eplan-rag-mcp
 /plugin install eplan-development@eplan-tools
 ```
 
-手动安装方式和更多细节见 [`claude-skills/eplan-development/README.md`](claude-skills/eplan-development/README.md)。
+手动安装方式和更多细节见 [该 Skill 的 README](https://github.com/covagashi/eplan-development-skill#readme)。
 
 ## 添加新的 EPLAN 操作
 

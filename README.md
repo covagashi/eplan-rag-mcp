@@ -8,9 +8,9 @@
 AI-assisted automation for **EPLAN Electric P8** and **EPLAN EEC Pro 2026**, built on the
 Model Context Protocol (MCP).
 
-The repository holds four independent sub-projects: a local MCP server that drives a
-running EPLAN instance, and three remote MCP servers on Cloudflare Workers that serve the
-indexed EPLAN documentation.
+This repository contains the local MCP server that drives a running EPLAN instance.
+The three remote documentation RAGs live in the separate
+[eplan-cloudflare-rags](https://github.com/covagashi/eplan-cloudflare-rags) repository.
 
 > Working with an LLM here? Read [`llm.md`](llm.md) — it describes, in LLM-facing terms,
 > everything the toolkit can do and configure.
@@ -19,22 +19,16 @@ indexed EPLAN documentation.
 
 ```
 .
-├── eplan-p8-mcp-server/          # LOCAL:  MCP server that controls EPLAN P8
-├── cloudflare-rag-eplan-p8/      # REMOTE: Cloudflare Worker serving the P8 docs RAG over MCP
-├── cloudflare-rag-eecpro/        # REMOTE: Cloudflare Worker serving the EEC Pro docs RAG over MCP
-├── cloudflare-rag-eplan-2027/    # REMOTE: Cloudflare Worker serving the 2027 API wiki (D1/FTS5 keyword search)
-└── claude-skills/                # SKILL:  mirror of covagashi/eplan-development-skill
+└── eplan-p8-mcp-server/          # LOCAL: MCP server that controls EPLAN P8
 ```
 
-| Folder | Type | Purpose | EPLAN product |
+| Component | Type | Purpose | EPLAN product |
 |---|---|---|---|
 | `eplan-p8-mcp-server/` | Local Python MCP | Drive a running EPLAN instance from Claude: open/close projects, exports, reports, scripts | EPLAN Electric P8 |
-| `cloudflare-rag-eplan-p8/` | Remote Cloudflare Worker | Serve the P8 doc index as a remote MCP + REST API | EPLAN Electric P8 |
-| `cloudflare-rag-eecpro/` | Remote Cloudflare Worker | Serve the EEC Pro doc index as a remote MCP + REST API | EPLAN EEC Pro 2026 |
-| `cloudflare-rag-eplan-2027/` | Remote Cloudflare Worker | Serve the 2027 API wiki as a remote MCP; D1 + FTS5 keyword search, complementary to the semantic index above | EPLAN Electric P8 2027 |
-| `claude-skills/eplan-development/` | Claude Code skill | Teach Claude to write correct EPLAN scripts, API code and Remote Client apps. Mirror of the standalone [**eplan-development-skill**](https://github.com/covagashi/eplan-development-skill) repository | EPLAN Electric P8 |
+| [**eplan-cloudflare-rags**](https://github.com/covagashi/eplan-cloudflare-rags) | Remote Cloudflare Workers, separate repository | Serve the P8 2026, P8 2027 and EEC Pro documentation over MCP and REST | EPLAN Electric P8 and EEC Pro |
+| [**eplan-development-skill**](https://github.com/covagashi/eplan-development-skill) | Claude Code skill, separate repository | Teach Claude to write correct EPLAN scripts, API code and Remote Client apps | EPLAN Electric P8 |
 
-Each sub-project carries its own README with installation and usage details.
+Each repository carries its own README with installation and usage details.
 
 ## What is MCP?
 
@@ -126,7 +120,7 @@ claude mcp add eplan-wiki-2027 -- cmd /c npx mcp-remote https://rag2027.covaga.x
 
 `eplan-wiki-2027` is deliberately a separate server rather than a 2026 → 2027 upgrade of
 `eplan-rag`: it indexes a different doc version *and* uses a different search mode (SQLite
-FTS5/bm25 keyword matching over [`cloudflare-rag-eplan-2027/`](cloudflare-rag-eplan-2027/)'s
+FTS5/bm25 keyword matching over [`cloudflare-rag-eplan-2027/`](https://github.com/covagashi/eplan-cloudflare-rags/tree/main/cloudflare-rag-eplan-2027)'s
 bundled wiki, versus Vectorize + bge semantic search). Measured head-to-head on real
 queries they fail differently: FTS5 wins exact-name lookups ("what is the signature of X"),
 semantic search wins when the query shares no vocabulary with the docs at all. Install both.
@@ -142,8 +136,8 @@ curl -X POST https://rag2027.covaga.xyz/search -H "Content-Type: application/jso
      -d '{"query": "FindAction", "topK": 3}'
 ```
 
-See [`cloudflare-rag-eplan-p8/README.md`](cloudflare-rag-eplan-p8/README.md) and
-[`cloudflare-rag-eecpro/README.md`](cloudflare-rag-eecpro/README.md) for the tools, REST
+See [`cloudflare-rag-eplan-p8/README.md`](https://github.com/covagashi/eplan-cloudflare-rags/blob/main/cloudflare-rag-eplan-p8/README.md) and
+[`cloudflare-rag-eecpro/README.md`](https://github.com/covagashi/eplan-cloudflare-rags/blob/main/cloudflare-rag-eecpro/README.md) for the tools, REST
 endpoints and architecture.
 
 ### Claude Code skill for EPLAN development
@@ -157,16 +151,15 @@ monitor thread, dispose discipline, the EPLAN 2025 remoting changes.
 
 The skill lives in its own repository and is deliberately **host-agnostic**: it assumes no
 MCP server, no particular script runner and no particular documentation index, so it is
-useful on its own whether or not you run anything else from here. That repository is the
-canonical copy; `claude-skills/` in this repo mirrors it.
+useful on its own whether or not you run anything else from here.
 
 ```
 /plugin marketplace add covagashi/eplan-development-skill
 /plugin install eplan-development@eplan-skills
 ```
 
-This repository is also a plugin marketplace, so the skill can equally be installed from
-here:
+This repository is also a plugin marketplace whose entry points to the same skill
+repository:
 
 ```
 /plugin marketplace add covagashi/eplan-rag-mcp
@@ -174,7 +167,7 @@ here:
 ```
 
 Manual installation and details:
-[`claude-skills/eplan-development/README.md`](claude-skills/eplan-development/README.md).
+[the skill's own README](https://github.com/covagashi/eplan-development-skill#readme).
 
 ## Adding new EPLAN actions
 
