@@ -7,7 +7,8 @@ nearest known EPLAN symbols, returning their short_name / description /
 variant so the agent can use the real identifier in EPLAN API calls.
 
 Runtime env:
-  CF_ACCOUNT_ID, CF_API_TOKEN, VECTORIZE_INDEX (default "eplan-symbols")
+  EPLAN_SYMBOLS_URL (default "https://symbols.covaga.xyz") — public endpoint.
+  No Cloudflare credentials needed: the Worker holds the index binding.
 
 Deps (lazy): pip install sentence-transformers pillow requests
 """
@@ -22,9 +23,7 @@ import requests
 __all__ = ["symbol_search"]
 TOOL_PREFIX = "eplan_"
 
-_ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "")
-_TOKEN = os.environ.get("CF_API_TOKEN", "")
-_INDEX = os.environ.get("VECTORIZE_INDEX", "eplan-symbols")
+_ENDPOINT = os.environ.get("EPLAN_SYMBOLS_URL", "https://symbols.covaga.xyz")
 
 _model = None
 
@@ -66,29 +65,22 @@ def symbol_search(image_path: str = "", image_base64: str = "",
         image_base64: alternatively, base64-encoded image content.
         top_k: how many candidate symbols to return (default 5).
     """
-    if not _ACCOUNT or not _TOKEN:
-        return ("symbol_search is not configured: set CF_ACCOUNT_ID and "
-                "CF_API_TOKEN in the MCP server environment.")
     img = _load_image(image_path, image_base64)
     vec = _embedder().encode(img, normalize_embeddings=True).tolist()
 
     r = requests.post(
-        f"https://api.cloudflare.com/client/v4/accounts/{_ACCOUNT}"
-        f"/vectorize/v2/indexes/{_INDEX}/query",
-        headers={"Authorization": f"Bearer {_TOKEN}",
-                 "Content-Type": "application/json"},
-        json={"vector": vec, "topK": int(top_k),
-              "returnValues": False, "returnMetadata": "all"},
+        f"{_ENDPOINT}/query",
+        json={"vector": vec, "topK": int(top_k)},
         timeout=30)
     if not r.ok:
-        return f"Vectorize query failed: HTTP {r.status_code} {r.text[:200]}"
-    matches = (r.json().get("result") or {}).get("matches") or []
+        return f"Symbol search failed: HTTP {r.status_code} {r.text[:200]}"
+    matches = (r.json() or {}).get("matches") or []
     if not matches:
         return "No similar symbols found in the index."
-    lines = [f"{i+1}. `{m['metadata'].get('short_name','?')}` "
-             f"(no. {m['metadata'].get('number','?')}, "
-             f"variant {m['metadata'].get('variant_id','?')}) — "
-             f"{m['metadata'].get('description','')} "
+    lines = [f"{i+1}. `{m.get('short_name','?')}` "
+             f"(no. {m.get('number','?')}, "
+             f"variant {m.get('variant_id','?')}) — "
+             f"{m.get('description','')} "
              f"[score {m.get('score', 0):.3f}]"
              for i, m in enumerate(matches)]
     return ("Closest EPLAN symbols for the given image:\n" + "\n".join(lines)
