@@ -140,6 +140,46 @@ See [`cloudflare-rag-eplan-p8/README.md`](https://github.com/covagashi/eplan-clo
 [`cloudflare-rag-eecpro/README.md`](https://github.com/covagashi/eplan-cloudflare-rags/blob/main/cloudflare-rag-eecpro/README.md) for the tools, REST
 endpoints and architecture.
 
+### Visual symbol RAG (new)
+
+Identify EPLAN electrical symbols from images — a cropped glyph from a PDF,
+schematic or screenshot in, the real `short_name` out:
+
+- Index: 33,502 EPLAN symbol images (IEC/NFPA) embedded with CLIP ViT-B/32
+  (512-dim, cosine) into Cloudflare Vectorize, from
+  [`covaga/electrical-symbols-dataset`](https://huggingface.co/datasets/covaga/electrical-symbols-dataset).
+- Public endpoint `https://symbols.covaga.xyz` (same open pattern as the
+  other RAGs — no credentials):
+
+```bash
+# vector = CLIP ViT-B/32 L2-normalized embedding of the symbol image
+curl -X POST https://symbols.covaga.xyz/query -H "Content-Type: application/json" \
+     -d '{"vector": [0.01, -0.02, "...512 floats..."], "topK": 5}'
+```
+
+Each match carries `short_name`, catalog `number`, `description` and
+`variant_id`, plus a cosine score — the `short_name` is the identifier EPLAN
+API calls expect. Re-indexing and redeploy run through GitHub Actions in
+[`cloudflare-rag-symbols/`](https://github.com/covagashi/eplan-cloudflare-rags/tree/main/cloudflare-rag-symbols).
+
+#### Using it from this MCP server
+
+A ready-made extension ships in
+[`eplan-p8-mcp-server/extensions/symbol_search.py`](./eplan-p8-mcp-server/extensions/symbol_search.py).
+Enable it and the agent gets an `eplan_symbol_search` tool:
+
+```powershell
+pip install sentence-transformers pillow requests
+set EPLAN_MCP_EXTENSIONS=<repo>\eplan-p8-mcp-server\extensions
+```
+
+Then, pointed at a cropped symbol image, Claude calls
+`eplan_symbol_search(image_path="C:\\...\\crop.png")` → the image is embedded
+locally with CLIP → `symbols.covaga.xyz` returns candidates like
+`F1 (no. 50, variant B) — Fuse, single-pole` → use the top `short_name` in
+EPLAN API calls. No Cloudflare token needed: the Worker holds the index
+binding.
+
 ### Claude Code skill for EPLAN development
 
 The MCP servers let Claude *act* on EPLAN. The
