@@ -15,6 +15,7 @@ import json
 import time
 import uuid
 from typing import Optional, List
+from cs_json import prepare_script
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("EPLAN")
@@ -76,7 +77,7 @@ def detect_installed_versions() -> list:
             bin_dir = os.path.join(PLATFORM_ROOT, name, "Bin")
             if not os.path.exists(os.path.join(bin_dir, "Eplan.EplApi.RemoteClientu.dll")):
                 continue
-            major = name.split(".")[0]
+            major = "2.9" if re.match(r"^2\.9(?:\.|$)", name) else name.split(".")[0]
             runtime = "coreclr" if os.path.exists(os.path.join(bin_dir, "Grpc.Net.Client.dll")) else "netfx"
             entry = {"version": major, "full_version": name, "bin": bin_dir, "runtime": runtime}
             if major not in installs or _version_key(name) > _version_key(installs[major]["full_version"]):
@@ -729,7 +730,7 @@ class EPLANConnectionManager:
                     escaped_result_path, escaped_action_name,
                 )
                 with open(script_path, "w", encoding="utf-8") as f:
-                    f.write(script_content)
+                    f.write(prepare_script(script_content, self.target_version))
                 return self._run_generated_script(action, script_path, result_path, started)
 
             # C# Script Content.
@@ -974,7 +975,7 @@ public class QuietExecute_{exec_id}
 }}
 """
             with open(script_path, "w", encoding="utf-8") as f:
-                f.write(script_content)
+                f.write(prepare_script(script_content, self.target_version))
             return self._run_generated_script(action, script_path, result_path, started)
 
         except Exception as e:

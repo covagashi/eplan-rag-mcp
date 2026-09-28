@@ -50,6 +50,7 @@ def _make_install(root, full_version, coreclr=False):
 
 def test_detect_installed_versions_fake_tree(tmp_path, monkeypatch):
     root = str(tmp_path)
+    _make_install(root, "2.9.4")
     _make_install(root, "2026.0.5")
     _make_install(root, "2026.0.10")          # newer patch of the same major
     _make_install(root, "2027.1.2", coreclr=True)
@@ -58,12 +59,13 @@ def test_detect_installed_versions_fake_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(eplan_connection, "PLATFORM_ROOT", root)
     installs = eplan_connection.detect_installed_versions()
 
-    assert [i["version"] for i in installs] == ["2027", "2026"]
+    assert [i["version"] for i in installs] == ["2027", "2026", "2.9"]
     assert installs[0]["runtime"] == "coreclr"
     by_major = {i["version"]: i for i in installs}
     # numeric compare: 0.10 > 0.5 (string compare would get this wrong)
     assert by_major["2026"]["full_version"] == "2026.0.10"
     assert by_major["2026"]["runtime"] == "netfx"
+    assert by_major["2.9"]["full_version"] == "2.9.4"
 
 
 def test_detect_installed_versions_missing_root(monkeypatch, tmp_path):
@@ -299,3 +301,24 @@ def test_eplan_listening_ports_are_strings_like_default_port(monkeypatch):
     ports = eplan_connection.eplan_listening_ports()
     assert all(isinstance(p, str) for p in ports)
     assert isinstance(eplan_connection.EPLANConnectionManager.DEFAULT_PORT, str)
+
+
+def test_eplan_29_wrapper_uses_portable_json(monkeypatch):
+    monkeypatch.delenv("EPLAN_MCP_JSON_MODE", raising=False)
+    mgr, fake = _manager_with_fake()
+    mgr.target_version = "2.9"
+    result = mgr.execute_action("unknownReadOnlyAction", quiet_mode=True)
+    assert result["success"]
+    assert "_McpJson(results)" in fake.captured_cs
+    assert "Newtonsoft.Json" not in fake.captured_cs
+
+
+def test_eplan_29_legacy_wrapper_uses_portable_json(monkeypatch):
+    monkeypatch.setenv("EPLAN_MCP_LEGACY_CLI", "1")
+    monkeypatch.delenv("EPLAN_MCP_JSON_MODE", raising=False)
+    mgr, fake = _manager_with_fake()
+    mgr.target_version = "2.9"
+    result = mgr.execute_action("unknownReadOnlyAction", quiet_mode=True)
+    assert result["success"]
+    assert "_McpJson(results)" in fake.captured_cs
+    assert "Newtonsoft.Json" not in fake.captured_cs

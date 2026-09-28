@@ -142,6 +142,13 @@ def _compact(entry):
     }
 
 
+def _connected_to_29():
+    """Whether the live session uses the pre-ribbon EPLAN 2.9 interface."""
+    manager = get_manager()
+    return bool(manager.connected and str(manager.target_version).startswith("2.9"))
+
+
+
 def action_catalog(
     search: str = None,
     category: str = None,
@@ -254,6 +261,11 @@ def action_catalog(
                 "eplan_version": meta.get("eplan_version"),
             },
             "actions": [_compact(e) for e in shown],
+            **({"version_note": (
+                "This registry and its GUI labels come from EPLAN 2027, not 2.9. "
+                "Search by action name or parameter, then use action_describe "
+                "for a live registration check before running an action."
+            )} if _connected_to_29() else {}),
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -804,6 +816,17 @@ def ribbon_catalog(tab: str = None, search: str = None) -> dict:
         built-in-command limitation.
     """
     try:
+        if _connected_to_29():
+            return {
+                "success": False,
+                "target_version": "2.9",
+                "error": "EPLAN 2.9 has no ribbon catalog.",
+                "hint": (
+                    "Use eplan_tools_search to discover MCP tools, or "
+                    "eplan_action_describe to check whether an action exists "
+                    "in this EPLAN session."
+                ),
+            }
         script = _RIBBON_SCRIPT.replace("__CLASS__", "RibbonCatalog_" + uuid.uuid4().hex[:6])
         result = _execute_script(script, timeout=90.0)
         if not result.get("success"):

@@ -214,6 +214,25 @@ Two cautions if you use the trace as evidence:
   `logs/` is gitignored, and the file should be treated as potentially
   containing customer data — do not attach it to a public issue.
 
+## JSON writer switch (`EPLAN_MCP_JSON_MODE`)
+
+Generated action wrappers and scripted tools need to write their results as JSON.
+The default `auto` mode uses a dependency-free C# writer with EPLAN 2.9 and
+keeps `Newtonsoft.Json` with newer installations. EPLAN 2.9's script compiler
+does not reference Newtonsoft, so scripts using it do not compile even if the DLL
+is loaded in EPLAN. Set `EPLAN_MCP_JSON_MODE=portable` to force the portable
+writer on another version, or `EPLAN_MCP_JSON_MODE=newtonsoft` to force the
+previous behavior. Set the variable before starting the MCP server.
+
+On EPLAN 2.9, use `eplan_connect(version="2.9")` (or first check
+`eplan_versions`). If several versions are installed, automatic connection
+still selects the newest. The switch only changes result serialization; action
+names and API classes must still exist in the connected EPLAN version. The
+`discovery` registration mode works on 2.9 because its tool search uses the
+MCP's Python registry. `eplan_ribbon_catalog` reports that the pre-ribbon
+2.9 UI is unsupported; `eplan_action_catalog` marks its 2027 GUI labels
+as version-specific and `eplan_action_describe` can check an action live.
+
 ## Escape hatch (`EPLAN_MCP_LEGACY_CLI`)
 
 `EPLAN_MCP_LEGACY_CLI=1` makes the generated C# fall back to the original

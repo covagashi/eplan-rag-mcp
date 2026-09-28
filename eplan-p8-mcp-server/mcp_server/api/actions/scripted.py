@@ -32,6 +32,7 @@ import uuid
 import hashlib
 from typing import List
 from ._base import _get_connected_manager, cs_escape
+from cs_json import prepare_script
 
 # A value used as a C# member/identifier (not inside a string literal) cannot
 # be escaped safely - it must be a real identifier. Reject anything else to
@@ -362,7 +363,7 @@ def _execute_script(script_content: str, timeout: float = 30.0) -> dict:
     try:
         # Write script
         with open(script_path, "w", encoding="utf-8") as f:
-            f.write(script_with_path)
+            f.write(prepare_script(script_with_path, getattr(manager, "target_version", None)))
 
         # Execute only - deliberately NOT RegisterScript.
         #

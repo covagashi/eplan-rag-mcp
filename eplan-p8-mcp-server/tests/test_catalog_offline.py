@@ -594,3 +594,25 @@ def test_label_search_does_not_break_plain_name_search():
     """Adding labels to the haystack must not disturb existing behaviour."""
     assert "backup" in [a["name"] for a in
                         catalog.action_catalog(search="backup", limit=200)["actions"]]
+
+
+def test_eplan_29_ribbon_catalog_fails_fast_with_discovery_guidance(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(catalog, "get_manager",
+                        lambda: SimpleNamespace(connected=True, target_version="2.9"))
+    def no_script(*args, **kwargs):
+        raise AssertionError("2.9 must not compile a ribbon script")
+    monkeypatch.setattr(catalog, "_execute_script", no_script)
+    result = catalog.ribbon_catalog()
+    assert result["success"] is False
+    assert result["target_version"] == "2.9"
+    assert "eplan_tools_search" in result["hint"]
+
+
+def test_eplan_29_action_catalog_labels_are_marked_as_2027(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(catalog, "get_manager",
+                        lambda: SimpleNamespace(connected=True, target_version="2.9"))
+    result = catalog.action_catalog(search="backup", limit=1)
+    assert result["success"]
+    assert "2027" in result["version_note"]
