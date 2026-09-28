@@ -5,8 +5,8 @@ after an MCP server restart: `SPECIAL` now reports 452 symbols (up from 73),
 `DCP2JICM` (id 402) is in the listing, and `truncated: false` is honest. The
 finding below is kept as the record of how this was found and why it
 mattered - see also `11-symbol-overview-inventory.md` for the workaround tool
-this fix made unnecessary (removed the same day), and
-`claude-skills/eplan-development/skills/eplan-development/references/api-data-access.md`
+this fix made unnecessary (removed the same day), and the
+[API data access guide](https://github.com/covagashi/eplan-development-skill/blob/main/skills/eplan-p8/eplan-development/references/api-data-access.md)
 for the promoted general-purpose version of this gotcha.
 
 # `live_symbol_catalog` Under-Reports Libraries — and Says It Didn't

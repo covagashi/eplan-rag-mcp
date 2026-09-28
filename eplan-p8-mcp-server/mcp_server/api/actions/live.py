@@ -4,11 +4,12 @@ Live DataModel actions - read and edit the project currently open in EPLAN.
 The action-based tools in this package drive EPLAN, but they cannot enumerate
 or mutate the object model of the loaded project: `using Eplan.EplApi.DataModel;`
 does not compile inside EPLAN's script engine (CS0234 - the engine compiles
-against a fixed assembly set). The technique that does work, documented in
-claude-skills/eplan-development (references/api-data-access.md and
-references/e3d-installation-spaces.md), is runtime reflection over the object
-model, with a `LockingStep` held for the duration (without it every project
-access throws NoLockingStepException) and `SelectionSet.GetCurrentProject(false)`
+against a fixed assembly set). The technique that does work is runtime
+reflection over the object model, documented in the eplan-development skill's
+[API data access](https://github.com/covagashi/eplan-development-skill/blob/main/skills/eplan-p8/eplan-development/references/api-data-access.md) and
+[3D installation spaces](https://github.com/covagashi/eplan-development-skill/blob/main/skills/eplan-p8/eplan-development/references/e3d-installation-spaces.md)
+guides. Hold a `LockingStep` for the duration (without it every project access
+throws NoLockingStepException), and use `SelectionSet.GetCurrentProject(false)`
 to reach the project without ProjectManager.
 
 Types are resolved by scanning AppDomain.CurrentDomain.GetAssemblies() rather
