@@ -261,6 +261,43 @@ def eplan_listening_ports(only_pids=None, pids=None) -> list:
     return ports
 
 
+
+def call_with_timeout(func, timeout_seconds, *args, **kwargs):
+    """
+    Run a blocking call with a deadline. Returns (result, timed_out, error).
+
+    Every EplanRemoteClient call except Connect() is an unbounded synchronous
+    call into the CLR. When EPLAN cannot service it - a human mid-edit, a modal
+    dialog, a project that will not close - the call never returns, and with it
+    goes the tool that made it AND this server's ability to answer anything
+    else. Measured 2026-09-11: StopEplan() blocked for 8m44s while a human had
+    a project open, and the session's only recovery was restarting the server.
+
+    The worker is a daemon thread and is deliberately NOT joined after the
+    timeout: it is stuck in native code and cannot be interrupted. Letting it
+    leak is the lesser evil - the alternative is hanging forever, which is the
+    bug being fixed. It ends when the process does.
+    """
+    import threading
+
+    box = {}
+
+    def run():
+        try:
+            box["value"] = func(*args, **kwargs)
+        except BaseException as e:      # noqa: BLE001 - reported, not swallowed
+            box["error"] = e
+
+    worker = threading.Thread(target=run, daemon=True,
+                              name=f"eplan-call-{getattr(func, '__name__', 'anon')}")
+    worker.start()
+    worker.join(timeout_seconds)
+
+    if worker.is_alive():
+        return None, True, None
+    return box.get("value"), False, box.get("error")
+
+
 class EPLANConnectionManager:
     """Manages the connection to EPLAN via Remote Client API."""
 
@@ -473,20 +510,34 @@ class EPLANConnectionManager:
             self.connected = False
             return {"success": False, "message": self.last_error}
 
-    def ping(self) -> dict:
-        """Check if EPLAN is responding."""
+    def ping(self, timeout_seconds: float = 15.0) -> dict:
+        """
+        Check if EPLAN is responding.
+
+        Bounded on purpose. TIMEOUT_SECONDS applies to Connect() only - every
+        other remoting call is an unbounded synchronous CLR call, so a wedged
+        EPLAN turns the health check itself into a hang, and the one tool whose
+        job is to answer "is it alive?" must always answer.
+        """
         if not self.connected or not self.client:
             return {"alive": False, "message": "Not connected"}
 
-        try:
-            alive = self.client.Ping()
-            return {
-                "alive": alive,
-                "message": "EPLAN responding" if alive else "No response"
-            }
-        except Exception as e:
+        alive, timed_out, error = call_with_timeout(self.client.Ping, timeout_seconds)
+        if timed_out:
+            # Not marked disconnected: the client may still be valid and EPLAN
+            # merely busy (a modal dialog, a long redraw). Saying so is more
+            # useful than guessing either way.
+            return {"alive": False, "timed_out": True,
+                    "message": f"EPLAN did not answer Ping within {timeout_seconds}s - "
+                               "it is running but not servicing remoting calls "
+                               "(a modal dialog or a long operation will do this)"}
+        if error is not None:
             self.connected = False
-            return {"alive": False, "message": f"Ping failed: {e}"}
+            return {"alive": False, "message": f"Ping failed: {error}"}
+        return {
+            "alive": bool(alive),
+            "message": "EPLAN responding" if alive else "No response"
+        }
 
     @staticmethod
     def _shape_messages(result: dict) -> dict:
