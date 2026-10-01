@@ -11,8 +11,7 @@ Implementation notes (verified against the P8 docs RAG and the
 eplan-development skill's remoting reference):
 - EplanRemoteClient.StartEplan() relies on the removed EplanServer action on
   EPLAN 2025+ and does NOT work there. The reliable way is to launch
-  EPLAN.exe ourselves and poll GetActiveEplanServersOnLocalMachine until the
-  remoting server appears.
+  EPLAN.exe ourselves and discover listening ports owned by that process.
 - EplanRemoteClient.StopEplan() stops the connected instance; a process kill
   is available only as an explicit opt-in fallback (force=True).
 - "Allow remote access via Remote Client" must be enabled in the EPLAN
@@ -25,6 +24,7 @@ import subprocess
 import time
 
 from ._base import _get_connected_manager, _quote_param
+from process_control import connected_process
 from eplan_connection import (
     get_manager,
     detect_installed_versions,
@@ -69,6 +69,10 @@ def app_launch(version: str = None, variant: str = None, headless: bool = False,
     Use this (optionally after app_shutdown) to bring EPLAN up unattended,
     e.g. in a build-deploy-test loop. EPLAN startup routinely takes 1-3
     minutes; the call blocks while polling for the remoting port.
+
+    Only a unique listening port owned by the launched process is accepted.
+    If startup hands off to another process, identity is not inferred: this
+    returns an error instead of connecting to an unrelated instance.
 
     Requires "Allow remote access via Remote Client" to be enabled in the
     EPLAN workstation settings, otherwise no remoting port ever opens and
@@ -124,43 +128,21 @@ def app_launch(version: str = None, variant: str = None, headless: bool = False,
     except Exception as e:
         return {"success": False, "error": f"Failed to start {exe}: {e}"}
 
-    # Poll for the remoting server. Server enumeration is unreliable right
-    # after a restart, so netstat-discovered listening ports of EPLAN.exe
-    # serve as a fallback signal (verified live: enumeration stayed empty
-    # while the port already accepted connections).
-    #
-    # GetActiveEplanServersOnLocalMachine (manager.get_active_servers()) does
-    # not report a PID, so it cannot tell a pre-existing instance's server
-    # apart from the one just launched. When nothing else was running before
-    # this call, that ambiguity does not exist and the fast path (servers,
-    # then unfiltered ports) is used as before. When one or more EPLAN
-    # instances already existed, only a listening port OWNED BY A NEW PID
-    # (this process's, or any that appeared after launch) is accepted -
-    # never the enumerated servers list, and never an old instance's port.
-    # Audit #42 item 12: this call used to accept whichever port turned up
-    # first, which could be the pre-existing instance's.
-    deadline = time.time() + max(10, wait_seconds)
+    # Only the process we launched may supply the remoting endpoint. A PID
+    # that merely appeared since our initial snapshot could belong to a human
+    # launching another instance concurrently.
+    deadline = time.monotonic() + max(10, wait_seconds)
     servers = []
     fallback_ports = []
-    new_pids = set()
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            break
+        fallback_ports = _eplan_listening_ports(only_pids={proc.pid})
+        if len(fallback_ports) == 1:
+            break
         time.sleep(3)
-        if not already_running:
-            servers = manager.get_active_servers()
-            if servers:
-                break
-            fallback_ports = _eplan_listening_ports()
-            if fallback_ports:
-                break
-        else:
-            current_pids = _eplan_pids()
-            new_pids = set(current_pids) - set(already_running)
-            new_pids.add(proc.pid)
-            fallback_ports = _eplan_listening_ports(only_pids=new_pids, pids=current_pids)
-            if fallback_ports:
-                break
 
-    port = servers[-1]["port"] if servers else (fallback_ports[-1] if fallback_ports else None)
+    port = fallback_ports[0] if len(fallback_ports) == 1 else None
     result = {
         "success": port is not None,
         "exe": exe,
@@ -172,27 +154,27 @@ def app_launch(version: str = None, variant: str = None, headless: bool = False,
         "new_pid": proc.pid,
     }
     if port is None:
-        if already_running:
-            result["error"] = (
-                f"EPLAN process (pid {proc.pid}) started, but no remoting port "
-                f"owned by that process (or any new EPLAN process) was found "
-                f"within {wait_seconds}s, and {len(already_running)} EPLAN "
-                f"instance(s) were already running before this call - refusing "
-                f"to connect to one of those instead of the one just launched. "
-                f"Check that 'Allow remote access via Remote Client' is enabled "
-                f"(File > Settings > Workstation > Interfaces > Remote access)."
-            )
-        else:
-            result["error"] = (
-                f"EPLAN process started but no remoting server appeared within "
-                f"{wait_seconds}s. Check that 'Allow remote access via Remote Client' "
-                f"is enabled (File > Settings > Workstation > Interfaces > Remote access)."
-            )
+        result["error"] = (
+            f"EPLAN process (pid {proc.pid}) started, but no unambiguous remoting "
+            f"port owned by that process was found within {wait_seconds}s "
+            "(or the process exited). Refusing to connect to another instance. "
+            "Check that 'Allow remote access via Remote Client' is enabled."
+        )
+        return result
+
+    # Recheck ownership and liveness immediately before connecting.
+    if proc.poll() is not None or port not in _eplan_listening_ports(only_pids={proc.pid}):
+        result.update(success=False, error="Launched process exited or its port changed before connection.")
         return result
 
     if connect_after:
         result["connect"] = manager.connect(port=port)
         result["success"] = result["connect"].get("success", False)
+        if result["success"] and (
+            proc.poll() is not None or port not in _eplan_listening_ports(only_pids={proc.pid})
+        ):
+            manager.disconnect()
+            result.update(success=False, error="Launched process exited or port ownership changed during connection.")
     return result
 
 
@@ -205,9 +187,13 @@ def app_shutdown(force: bool = False, wait_seconds: int = 60) -> dict:
     edits-in-progress can be lost). Never call this on a machine where a
     human is actively working in EPLAN without their explicit go-ahead.
 
+    Success requires verified process exit. If local process identity cannot
+    be established (including remote connections), StopEplan is still requested,
+    but exit_verified and success are False and force cannot terminate anything.
+
     Args:
         force: If True and StopEplan() fails or the process lingers past
-            wait_seconds, kill EPLAN.exe with taskkill as a last resort.
+            wait_seconds, terminate only the identified connected local process as a last resort.
             Default False - never kills.
         wait_seconds: How long to wait for the process to exit (default 60).
     """
@@ -215,52 +201,62 @@ def app_shutdown(force: bool = False, wait_seconds: int = 60) -> dict:
     if error:
         return error
 
-    pids_before = _eplan_pids()
-    stop_ok = False
-    stop_error = None
+    # Acquire a Windows process handle before StopEplan. Waiting/termination
+    # use this handle, so PID reuse can never redirect them to another process.
+    target = None
+    identity_error = None
     try:
-        stop_ok = bool(manager.client.StopEplan())
-    except Exception as e:
-        stop_error = str(e)
+        target = connected_process(manager.host, manager.port, allow_terminate=force)
+    except Exception as exc:
+        identity_error = str(exc)
 
-    # The remote client is stale either way - drop the connection state.
+    pids_before = _eplan_pids()  # informational only; never evidence of exit
+    result = {
+        "success": False,
+        "target_pid": target.pid if target else None,
+        "exit_verified": False,
+        "stop_eplan_returned": False,
+        "pids_before": pids_before,
+        "force_killed": [],
+    }
     try:
-        manager.disconnect()
-    except Exception:
-        pass
-
-    # Wait for the process(es) to actually exit so the caller can safely
-    # overwrite DLLs afterwards.
-    deadline = time.time() + max(5, wait_seconds)
-    remaining = _eplan_pids()
-    while remaining and time.time() < deadline:
-        time.sleep(2)
-        remaining = _eplan_pids()
-
-    killed = []
-    if remaining and force:
-        for pid in remaining:
+        try:
+            result["stop_eplan_returned"] = bool(manager.client.StopEplan())
+        except Exception as exc:
+            result["stop_eplan_error"] = str(exc)
+        finally:
             try:
-                subprocess.run(["taskkill", "/PID", str(pid), "/F"],
-                               capture_output=True, timeout=15)
-                killed.append(pid)
+                manager.disconnect()
             except Exception:
                 pass
-        time.sleep(2)
-        remaining = _eplan_pids()
 
-    result = {
-        "success": not remaining,
-        "stop_eplan_returned": stop_ok,
-        "pids_before": pids_before,
-        "pids_still_running": remaining,
-        "force_killed": killed,
-    }
-    if stop_error:
-        result["stop_eplan_error"] = stop_error
-    if remaining:
-        result["error"] = (f"EPLAN process(es) still running after {wait_seconds}s: "
-                           f"{remaining}. Retry with force=True to kill them.")
+        if target is None:
+            result["error"] = (
+                "Shutdown requested but process exit could not be verified; "
+                "forced termination is disabled. " + (identity_error or "Unknown target.")
+            )
+        else:
+            try:
+                exited = target.wait(max(0, wait_seconds))
+                if not exited and force:
+                    target.terminate()
+                    exited = target.wait(15)
+                    if exited:
+                        result["force_killed"] = [target.pid]
+                result["exit_verified"] = exited
+                result["success"] = exited
+                if not exited:
+                    result["error"] = f"Target EPLAN process {target.pid} has not exited."
+            except Exception as exc:
+                result["error"] = f"Could not verify or terminate target process: {exc}"
+    finally:
+        if target is not None:
+            target.close()
+
+    remaining = _eplan_pids()
+    result["pids_still_running"] = remaining
+    result["other_instances"] = [pid for pid in remaining if pid != result["target_pid"]] if target else None
+    result["note"] = "Other EPLAN instances are left untouched. Process lists are best-effort diagnostics."
     return result
 
 
@@ -310,7 +306,7 @@ def app_restart(reopen_project: bool = True, headless: bool = False,
     steps["shutdown"] = app_shutdown(force=force)
     if not steps["shutdown"].get("success"):
         return {"success": False, "steps": steps,
-                "error": "Shutdown failed - EPLAN still running, not relaunching."}
+                "error": "Target process exit was not verified; not relaunching."}
 
     steps["launch"] = app_launch(version=version, variant=variant, headless=headless,
                                    wait_seconds=wait_seconds, connect_after=True)
